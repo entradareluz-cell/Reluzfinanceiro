@@ -1,10 +1,8 @@
-// Configuração do Firebase Web.
-// Estes dados são públicos no frontend. NÃO coloque service account, private key ou senha aqui.
-window.FIREBASE_CONFIG = {
-  apiKey: "COLE_AQUI_API_KEY",
-  authDomain: "SEU-PROJETO.firebaseapp.com",
-  projectId: "SEU-PROJETO",
-  storageBucket: "SEU-PROJETO.firebasestorage.app",
-  messagingSenderId: "COLE_AQUI_SENDER_ID",
-  appId: "COLE_AQUI_APP_ID"
+const firebaseConfig = {
+  apiKey: "AIzaSyBWuAqwQjqZCdxlNSJc_nXaLL598EI4UvU",
+  authDomain: "reluz-financeiro.firebaseapp.com",
+  projectId: "reluz-financeiro",
+  storageBucket: "reluz-financeiro.firebasestorage.app",
+  messagingSenderId: "1085388395323",
+  appId: "1:1085388395323:web:729589c9222c8e77025d1e"
 };
