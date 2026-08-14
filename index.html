@@ -1,13 +1,47 @@
 <!doctype html><html lang="pt-BR"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Meu Financeiro</title><link rel="stylesheet" href="css/style.css">
+<title>Meu Financeiro</title><link rel="stylesheet" href="style.css">
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script></head><body>
-<div id="loginView" class="auth"><div class="card authcard"><h1>💰 Meu Financeiro</h1>
-<form id="loginForm"><input id="loginEmail" type="email" placeholder="E-mail" required><input id="loginPassword" type="password" placeholder="Senha" required><button>Entrar</button></form>
-<hr><form id="signupForm"><input id="signupName" placeholder="Nome" required><input id="signupEmail" type="email" placeholder="E-mail" required><input id="signupPassword" type="password" placeholder="Senha" minlength="6" required><button class="secondary">Criar conta</button></form><p id="authMsg"></p></div></div>
+<div id="loginView" class="auth">
+  <div class="auth-shell">
+    <section class="auth-visual">
+      <div class="brand-mark">R$</div>
+      <div class="eyebrow">RELuz • FINANCEIRO</div>
+      <h1>Seu dinheiro.<br><span>Sob controle.</span></h1>
+      <p>Uma experiência financeira simples, elegante e segura para acompanhar sua vida financeira em um só lugar.</p>
+      <div class="auth-features">
+        <div><strong>01</strong><span>Dashboard inteligente</span></div>
+        <div><strong>02</strong><span>Controle de gastos</span></div>
+        <div><strong>03</strong><span>Relatórios completos</span></div>
+      </div>
+      <div class="auth-orb orb-one"></div><div class="auth-orb orb-two"></div>
+    </section>
+    <section class="card authcard">
+      <div class="auth-logo-row"><div class="mini-logo">💰</div><div><strong>Meu Financeiro</strong><small>Área segura</small></div></div>
+      <div class="auth-heading"><h2>Acesse sua conta</h2><p>Entre para continuar de onde parou.</p></div>
+      <form id="loginForm" class="auth-form">
+        <label>E-mail<input id="loginEmail" type="email" placeholder="voce@exemplo.com" autocomplete="email" required></label>
+        <label>Senha<input id="loginPassword" type="password" placeholder="••••••••" autocomplete="current-password" required></label>
+        <button class="auth-primary" type="submit">Entrar na conta <span>→</span></button>
+      </form>
+      <div class="auth-divider"><span>ou</span></div>
+      <div class="signup-box">
+        <div><strong>Primeiro acesso?</strong><p>Crie sua conta gratuitamente.</p></div>
+        <form id="signupForm" class="signup-form">
+          <label>Nome<input id="signupName" placeholder="Seu nome" autocomplete="name" required></label>
+          <label>E-mail<input id="signupEmail" type="email" placeholder="voce@exemplo.com" autocomplete="email" required></label>
+          <label>Senha<input id="signupPassword" type="password" placeholder="Mínimo de 6 caracteres" autocomplete="new-password" minlength="6" required></label>
+          <button class="secondary auth-secondary" type="submit">Criar minha conta</button>
+        </form>
+      </div>
+      <p id="authMsg" class="auth-msg"></p>
+      <small class="auth-security">🔒 Seus dados são protegidos pelo Firebase.</small>
+    </section>
+  </div>
+</div>
 <div id="app" class="hidden"><header><b>💰 Meu Financeiro</b><span><span id="userName"></span> <button id="logout" class="danger">Sair</button></span></header>
 <div class="layout"><nav>
 <button data-page="dashboard">📊 Dashboard</button><button data-page="lancamentos">📝 Lançamentos</button><button data-page="categorias">🏷️ Categorias</button><button data-page="cartoes">💳 Cartões</button><button data-page="recorrentes">🔄 Recorrentes</button><button data-page="metas">🎯 Metas</button><button data-page="contas">🏦 Contas</button><button data-page="relatorios">📄 Relatórios</button></nav>
@@ -31,4 +65,4 @@
 <section id="contas" class="page hidden"><h2>Contas e patrimônio</h2><div class="card"><form id="accountForm" class="grid"><label>Nome<input id="accountName" required></label><label>Tipo<select id="accountType"><option>Conta corrente</option><option>Poupança</option><option>Dinheiro</option><option>Investimento</option><option>Outro</option></select></label><label>Saldo inicial<input id="accountInitial" type="number" step=".01" value="0"></label><button class="wide">Cadastrar</button></form><p id="accountMsg"></p></div><div class="card table"><table><thead><tr><th>Conta</th><th>Tipo</th><th>Inicial</th><th>Movimentação</th><th>Atual</th></tr></thead><tbody id="accountBody"></tbody></table></div></section>
 
 <section id="relatorios" class="page hidden"><h2>Relatórios</h2><div class="card"><div class="actions"><label>Mês<input id="reportMonth" type="month"></label><button id="excel">Exportar Excel</button><button id="pdf" class="secondary">Gerar PDF</button></div><div id="summary"></div></div><div class="card table"><table><thead><tr><th>Data</th><th>Tipo</th><th>Descrição</th><th>Categoria</th><th>Valor</th><th>Status</th></tr></thead><tbody id="reportBody"></tbody></table></div></section>
-</main></div></div><script src="js/config.js"></script><script type="module" src="js/app.js"></script></body></html>
+</main></div></div><script src="config.js"></script><script type="module" src="app.js"></script></body></html>

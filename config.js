@@ -1,4 +1,4 @@
-const firebaseConfig = {
+window.FIREBASE_CONFIG = {
   apiKey: "AIzaSyBWuAqwQjqZCdxlNSJc_nXaLL598EI4UvU",
   authDomain: "reluz-financeiro.firebaseapp.com",
   projectId: "reluz-financeiro",
