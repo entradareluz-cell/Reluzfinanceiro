@@ -114,12 +114,21 @@ document.addEventListener("DOMContentLoaded",async()=>{
     // corrida entre o submit do login e o carregamento inicial do aplicativo.
     sb.auth.onAuthStateChange(async(e,s)=>{
       try{
-        if(s?.user){ await start(s.user); }
-        else { loginView(); }
+        if(s?.user){
+          // O login/signup também chama start() diretamente. O listener só garante
+          // a restauração automática de uma sessão já existente.
+          if($("app").classList.contains("hidden")) await start(s.user);
+        } else if(!user){
+          loginView();
+        }
       }catch(err){
         console.error("Falha ao abrir a sessão",err);
-        // Nunca devolve o usuário para a tela de login por erro de Firestore.
-        if(s?.user){ user=s.user; $("loginView").classList.add("hidden"); $("app").classList.remove("hidden"); page("dashboard"); }
+        if(s?.user){
+          user=s.user;
+          $("loginView").classList.add("hidden");
+          $("app").classList.remove("hidden");
+          page("dashboard");
+        }
         msg("authMsg",friendlyError(err));
       }
     });
@@ -153,7 +162,12 @@ async function login(e){
   try{
     const r=await sb.auth.signInWithPassword({email,password});
     if(r.error){msg("authMsg",friendlyError(r.error));return;}
-    // Não chama start aqui: onAuthStateChanged fará a transição uma única vez.
+    if(r.data?.user){
+      // Abre o sistema imediatamente. Não dependemos do listener para a transição.
+      await start(r.data.user);
+    } else {
+      msg("authMsg","Login realizado, mas o Firebase não retornou o usuário. Tente novamente.");
+    }
   }catch(err){console.error("Erro no login",err);msg("authMsg",friendlyError(err));}
 }
 async function signup(e){
@@ -161,8 +175,11 @@ async function signup(e){
   msg("authMsg","Criando sua conta...");
   const r=await sb.auth.signUp({email:$("signupEmail").value.trim(),password:$("signupPassword").value,options:{data:{name:$("signupName").value.trim()}}});
   if(r.error){msg("authMsg",friendlyError(r.error));return;}
-  // onAuthStateChanged abre o sistema quando o Firebase autenticar o usuário.
-  if(!r.data?.user) msg("authMsg","Conta criada. Se a confirmação de e-mail estiver ativa, verifique sua caixa de entrada.");
+  if(r.data?.user){
+    await start(r.data.user);
+  } else {
+    msg("authMsg","Conta criada. Se a confirmação de e-mail estiver ativa, verifique sua caixa de entrada.");
+  }
 }
 async function deduplicateCategories(rows){
   const seen=new Map();
@@ -391,7 +408,7 @@ function initPaymentBreakdown(){
   updatePaymentParts();
 }
 function collectPaymentParts(){return [...document.querySelectorAll('#paymentParts .payment-part')].map(p=>({method:p.querySelector('.part-method').value,amount:+p.querySelector('.part-amount').value||0,card_id:p.querySelector('.part-card')?.value||null,rate_id:p.querySelector('.part-rate')?.value||null,installments:+p.querySelector('.part-install')?.value||1,fee_percent:+p.querySelector('.part-fee')?.value||0})).filter(x=>x.amount>0)}
-function clearTxForm(){editingTxId=null;$("txForm")?.reset();$("txDate").value=today;$("txPaidDate").value="";$("txPaidAmount").value="";$("txMetalValue").value="";$("txInitialKg").value="";$("txFinalKg").value="";$("txForm button[type=submit]")?.textContent="Salvar lançamento";$("txMsg").textContent="";initPaymentBreakdown();updateMetalFields();}
+function clearTxForm(){editingTxId=null;$("txForm")?.reset();$("txDate").value=today;$("txPaidDate").value="";$("txPaidAmount").value="";$("txMetalValue").value="";$("txInitialKg").value="";$("txFinalKg").value="";const submitBtn=$("txForm button[type=submit]");if(submitBtn)submitBtn.textContent="Salvar lançamento";$("txMsg").textContent="";initPaymentBreakdown();updateMetalFields();}
 async function editTx(id){
   const t=txs.find(x=>x.id===id);if(!t)return;
   editingTxId=id;page('lancamentos');
