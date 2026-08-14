@@ -95,7 +95,7 @@ const sb={
  }
 };
 
-let user,categories=[],accounts=[],cards=[],recurring=[],goalsList=[],txs=[],flowChart,catChart;
+let user,categories=[],accounts=[],cards=[],recurring=[],goalsList=[],txs=[],machineRates=[],flowChart,catChart;
 const $=x=>document.getElementById(x),today=new Date().toISOString().slice(0,10),thisMonth=today.slice(0,7);
 const money=n=>Number(n||0).toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
 const esc=s=>String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]));
@@ -109,12 +109,21 @@ document.addEventListener("DOMContentLoaded",async()=>{
   $("dashMonth").onchange=dashboard;$("reportMonth").onchange=report;$("transferForm")?.addEventListener("submit",saveTransfer);$("excel").onclick=excel;$("pdf").onclick=pdf;
   document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>page(b.dataset.page));
   try{
-    if(!firebaseReady) throw new Error("Configuração do Firebase não carregada. Verifique o arquivo config.js.");
-    const {data,error}=await sb.auth.getSession();
-    if(error) throw error;
-    if(data.session) await start(data.session.user); else loginView();
-    sb.auth.onAuthStateChange(async(e,s)=>{try{if(s) await start(s.user); else loginView()}catch(err){console.error("Falha ao abrir a sessão",err);loginView();msg("authMsg",friendlyError(err))}});
-  }catch(err){console.error(err);loginView();msg("authMsg",friendlyError(err))}
+    if(!firebaseReady) throw new Error("Configuração do Firebase não carregada. Verifique o config.js.");
+    // A sessão é controlada exclusivamente pelo listener. Isso evita uma
+    // corrida entre o submit do login e o carregamento inicial do aplicativo.
+    sb.auth.onAuthStateChange(async(e,s)=>{
+      try{
+        if(s?.user){ await start(s.user); }
+        else { loginView(); }
+      }catch(err){
+        console.error("Falha ao abrir a sessão",err);
+        // Nunca devolve o usuário para a tela de login por erro de Firestore.
+        if(s?.user){ user=s.user; $("loginView").classList.add("hidden"); $("app").classList.remove("hidden"); page("dashboard"); }
+        msg("authMsg",friendlyError(err));
+      }
+    });
+  }catch(err){console.error("Falha ao inicializar Firebase",err);loginView();msg("authMsg",friendlyError(err))}
 });
 function loginView(){$("loginView").classList.remove("hidden");$("app").classList.add("hidden")}
 async function start(u){
@@ -136,17 +145,24 @@ async function start(u){
   page("dashboard");
 }
 async function login(e){
-  e.preventDefault();msg("authMsg","");
-  const r=await sb.auth.signInWithPassword({email:$("loginEmail").value.trim(),password:$("loginPassword").value});
-  if(r.error){msg("authMsg",friendlyError(r.error));return;}
-  if(r.data?.user) await start(r.data.user);
+  e.preventDefault();
+  msg("authMsg","Entrando...");
+  const email=$("loginEmail").value.trim();
+  const password=$("loginPassword").value;
+  if(!email||!password){msg("authMsg","Informe e-mail e senha.");return;}
+  try{
+    const r=await sb.auth.signInWithPassword({email,password});
+    if(r.error){msg("authMsg",friendlyError(r.error));return;}
+    // Não chama start aqui: onAuthStateChanged fará a transição uma única vez.
+  }catch(err){console.error("Erro no login",err);msg("authMsg",friendlyError(err));}
 }
 async function signup(e){
-  e.preventDefault();msg("authMsg","");
+  e.preventDefault();
+  msg("authMsg","Criando sua conta...");
   const r=await sb.auth.signUp({email:$("signupEmail").value.trim(),password:$("signupPassword").value,options:{data:{name:$("signupName").value.trim()}}});
   if(r.error){msg("authMsg",friendlyError(r.error));return;}
-  if(r.data?.user) await start(r.data.user);
-  else msg("authMsg","Conta criada. Se a confirmação de e-mail estiver ativa, verifique sua caixa de entrada.");
+  // onAuthStateChanged abre o sistema quando o Firebase autenticar o usuário.
+  if(!r.data?.user) msg("authMsg","Conta criada. Se a confirmação de e-mail estiver ativa, verifique sua caixa de entrada.");
 }
 async function deduplicateCategories(rows){
   const seen=new Map();
