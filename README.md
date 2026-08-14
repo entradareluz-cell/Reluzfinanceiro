@@ -98,3 +98,14 @@ Esses dados são gravados no documento do lançamento nos campos `metal_value`, 
 - Cada forma de recebimento possui valor próprio; cartão de crédito pode informar número de parcelas e cartão utilizado.
 - O sistema valida que a soma das formas de recebimento seja exatamente igual ao valor total da entrada.
 - Uso de múltiplas formas também aparece nos relatórios e no Excel.
+
+
+## Atualizações — parcelamento e taxas de maquininha
+- Cada cartão pode ter uma taxa da maquininha (%) cadastrada.
+- Entradas no cartão podem ser parceladas automaticamente.
+- O sistema calcula a taxa em cada parcela e grava valor bruto, taxa e valor líquido.
+- A primeira parcela pode ficar recebida e as futuras como pendentes.
+- O relatório e o Excel exibem bruto, taxa e líquido.
+- O status **Pagamento parcial** abre automaticamente a caixa de formas de pagamento.
+- No pagamento parcial, informe o valor pago/recebido agora e distribua em até duas formas.
+- PIX, boleto, dinheiro e cartão podem ser combinados; cartão aceita parcelamento e taxa cadastrada.
