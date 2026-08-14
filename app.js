@@ -5,7 +5,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js";
 import {
  getFirestore, collection, doc, getDoc, getDocs, addDoc, setDoc,
- deleteDoc, query, where, orderBy, limit, serverTimestamp, writeBatch
+ deleteDoc, query, where, orderBy, limit, serverTimestamp, writeBatch, updateDoc
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-storage.js";
 
@@ -104,7 +104,7 @@ function friendlyError(err){const code=err?.code||"";const m=err?.message||Strin
 document.addEventListener("DOMContentLoaded",async()=>{
   $("dashMonth").value=thisMonth;$("reportMonth").value=thisMonth;$("txDate").value=today;
   $("loginForm").onsubmit=login;$("signupForm").onsubmit=signup;$("logout").onclick=()=>sb.auth.signOut();
-  $("txForm").onsubmit=saveTx;$("catForm").onsubmit=saveCategory;$("cardForm").onsubmit=saveCard;$("recForm").onsubmit=saveRec;$("goalForm").onsubmit=saveGoal;$("accountForm").onsubmit=saveAccount;$("txType").onchange=fillCategorySelects;$("recType")?.addEventListener("change",fillCategorySelects);
+  $("txForm").onsubmit=saveTx;$("catForm").onsubmit=saveCategory;$("cardForm").onsubmit=saveCard;$("rateForm").onsubmit=saveMachineRate;$("recForm").onsubmit=saveRec;$("goalForm").onsubmit=saveGoal;$("accountForm").onsubmit=saveAccount;$("txType").onchange=fillCategorySelects;$("txCat").addEventListener("change",updateMetalFields);$("recType")?.addEventListener("change",fillCategorySelects);
   initPaymentBreakdown();
   $("dashMonth").onchange=dashboard;$("reportMonth").onchange=report;$("transferForm")?.addEventListener("submit",saveTransfer);$("excel").onclick=excel;$("pdf").onclick=pdf;
   document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>page(b.dataset.page));
@@ -143,15 +143,16 @@ async function load(){
   // Toda consulta é filtrada pelo UID. As Firestore Rules não permitem
   // consultar uma coleção inteira e depois filtrar no navegador.
   const uid=user.uid;
-  let [a,b,c,d,e,f]=await Promise.all([
+  let [a,b,c,d,e,f,g]=await Promise.all([
     sb.from("categories").select("*").eq("user_id",uid),
     sb.from("accounts").select("*").eq("user_id",uid),
     sb.from("cards").select("*").eq("user_id",uid),
     sb.from("recurring").select("*,categories(name)").eq("user_id",uid),
     sb.from("goals").select("*").eq("user_id",uid),
-    sb.from("transactions").select("*,categories(name),accounts(name),cards(name)").eq("user_id",uid).limit(3000)
+    sb.from("transactions").select("*,categories(name),accounts(name),cards(name)").eq("user_id",uid).limit(3000),
+    sb.from("machine_rates").select("*").eq("user_id",uid)
   ]);
-  const names=["categories","accounts","cards","recurring","goals","transactions"];
+  const names=["categories","accounts","cards","recurring","goals","transactions","machine_rates"];
   [a,b,c,d,e,f].forEach((r,i)=>{if(r.error) console.error("Erro ao carregar "+names[i],r.error)});
   categories=await deduplicateCategories(a.data||[]);categories.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
   categoriesCache=categories;
@@ -172,13 +173,32 @@ async function load(){
   recurring=d.data||[];
   goalsList=e.data||[];
   txs=f.data||[];
+  machineRates=(g.data||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
   txs.sort((x,y)=>String(y.transaction_date||"").localeCompare(String(x.transaction_date||"")));
   txs.forEach(t=>joinRelations("transactions",t));
   recurring.forEach(r=>joinRelations("recurring",r));
   fill();render();window.__reluzLoaded=true
 }
-function fill(){fillCategorySelects();if($("transferFrom"))$("transferFrom").innerHTML=accounts.map(a=>`<option value="${a.id}">${esc(a.name)}</option>`).join("");if($("transferTo"))$("transferTo").innerHTML=accounts.map(a=>`<option value="${a.id}">${esc(a.name)}</option>`).join("");if($("transferDate"))$("transferDate").value=today;$("txAccount").innerHTML=accounts.map(a=>`<option value="${a.id}">${esc(a.name)}</option>`).join("");$("txCard").innerHTML='<option value="">Nenhum</option>'+cards.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join("");$("catBody").innerHTML=categories.map(c=>`<tr><td>${esc(c.name)}</td><td>${c.type==="saida"?"Saída":c.type==="entrada"?"Entrada":"Ambos"}</td><td><button type="button" class="danger" onclick="deleteCategory('${c.id}')">Excluir</button></td></tr>`).join("")||'<tr><td colspan="3">Nenhuma categoria cadastrada.</td></tr>'}
-function fillCategorySelects(){const type=$("txType")?.value||"saida";const available=categories.filter(c=>c.type==="ambos"||c.type===type);$("txCat").innerHTML=available.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join("")||'<option value="">Cadastre uma categoria primeiro</option>';const recurringType=$("recType")?.value||"saida";const recurringCats=categories.filter(c=>c.type==="ambos"||c.type===recurringType);$("recCat").innerHTML=recurringCats.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join("")||'<option value="">Cadastre uma categoria primeiro</option>'}
+function fill(){
+  fillCategorySelects();
+  if($("transferFrom"))$("transferFrom").innerHTML=accounts.map(a=>`<option value="${a.id}">${esc(a.name)}</option>`).join("");
+  if($("transferTo"))$("transferTo").innerHTML=accounts.map(a=>`<option value="${a.id}">${esc(a.name)}</option>`).join("");
+  if($("transferDate"))$("transferDate").value=today;
+  $("txAccount").innerHTML=accounts.map(a=>`<option value="${a.id}">${esc(a.name)}</option>`).join("");
+  $("txCard").innerHTML='<option value="">Nenhum</option>'+cards.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join("");
+  $("catBody").innerHTML=categories.map(c=>`<tr><td>${esc(c.name)}</td><td>${c.type==="saida"?"Saída":c.type==="entrada"?"Entrada":"Ambos"}</td><td><button type="button" class="danger" onclick="deleteCategory('${c.id}')">Excluir</button></td></tr>`).join("")||'<tr><td colspan="3">Nenhuma categoria cadastrada.</td></tr>';
+  renderMachineRates();
+  refreshPaymentRateOptions();
+  updatePaymentParts();
+}
+function updateMetalFields(){
+  const el=$("metalFields"), catId=$("txCat")?.value;
+  if(!el)return;
+  const cat=categories.find(c=>c.id===catId);
+  const isPedido=String(cat?.name||"").trim().toLowerCase()==="pedido";
+  el.classList.toggle("hidden",!isPedido);
+}
+function fillCategorySelects(){const type=$("txType")?.value||"saida";const available=categories.filter(c=>c.type==="ambos"||c.type===type);$("txCat").innerHTML=available.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join("")||'<option value="">Cadastre uma categoria primeiro</option>';const recurringType=$("recType")?.value||"saida";const recurringCats=categories.filter(c=>c.type==="ambos"||c.type===recurringType);$("recCat").innerHTML=recurringCats.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join("")||'<option value="">Cadastre uma categoria primeiro</option>';updateMetalFields()}
 async function saveCategory(e){
   e.preventDefault();
   msg("catMsg","");
@@ -224,49 +244,117 @@ function paymentTargetAmount(){
   const total=+$('txAmount')?.value||0;
   return status==="parcial" ? (+$('txPaidAmount')?.value||0) : total;
 }
+function paymentMethodLabel(v){return ({pix:'PIX',debit:'Débito',credit:'Cartão de crédito',cash:'Dinheiro',transfer:'Transferência',boleto:'Boleto',other:'Outro'})[v]||v}
 function paymentPartTemplate(index,data={}){
   const methods=[['pix','PIX'],['debit','Débito'],['credit','Cartão de crédito'],['cash','Dinheiro'],['transfer','Transferência'],['boleto','Boleto'],['other','Outro']];
   const method=data.method||'pix';
   const cardsHtml=cards.map(c=>`<option value="${c.id}" ${data.card_id===c.id?'selected':''}>${esc(c.name)}</option>`).join('');
+  const ratesHtml=machineRates.map(r=>`<option value="${r.id}" ${data.rate_id===r.id?'selected':''}>${esc(r.name)}</option>`).join('');
   return `<div class="payment-part" data-payment-index="${index}">
-    <label>Forma de pagamento<select class="part-method">${methods.map(([v,l])=>`<option value="${v}" ${method===v?'selected':''}>${l}</option>`).join('')}</select></label>
-    <label>Valor desta forma<input class="part-amount" type="number" min="0" step="0.01" value="${data.amount??''}" placeholder="0,00"></label>
-    <label class="part-card-wrap ${method==='credit'?'':'hidden'}">Cartão<select class="part-card"><option value="">Selecione</option>${cardsHtml}</select></label>
-    <label class="part-install-wrap ${method==='credit'?'':'hidden'}">Parcelas<input class="part-install" type="number" min="1" value="${data.installments||1}"></label>
-    <button type="button" class="part-remove ${index===0?'hidden':''}">Remover</button>
-    <div class="part-detail">
-      <label class="part-fee-wrap ${method==='credit'?'':'hidden'}">Taxa da maquininha (%)<input class="part-fee" type="number" min="0" max="100" step="0.01" value="${data.fee_percent??''}" placeholder="Ex.: 2,99"></label>
-      <label class="part-net-wrap ${method==='credit'?'':'hidden'}">Taxa estimada<input class="part-fee-value" type="text" readonly value="R$ 0,00"></label>
-      <label class="part-net-wrap ${method==='credit'?'':'hidden'}">Líquido estimado<input class="part-net" type="text" readonly value="R$ 0,00"></label>
+    <div class="part-main-grid">
+      <label>Forma de pagamento<select class="part-method">${methods.map(([v,l])=>`<option value="${v}" ${method===v?'selected':''}>${l}</option>`).join('')}</select></label>
+      <label>Valor desta forma<input class="part-amount" type="number" min="0" step="0.01" value="${data.amount??''}" placeholder="0,00"></label>
+      <label class="part-card-wrap ${method==='credit'?'':'hidden'}">Cartão<select class="part-card"><option value="">Selecione</option>${cardsHtml}</select></label>
+      <label class="part-rate-wrap ${method==='credit'?'':'hidden'}">Maquininha<select class="part-rate"><option value="">Sem taxa cadastrada</option>${ratesHtml}</select></label>
+      <label class="part-install-wrap ${method==='credit'?'':'hidden'}">Parcelas<input class="part-install" type="number" min="1" value="${data.installments||1}"></label>
+      <button type="button" class="part-remove ${index===0?'hidden':''}">Remover</button>
     </div>
+    <div class="part-detail ${method==='credit'?'':'hidden'}">
+      <label>Taxa aplicada (%)<input class="part-fee" type="number" min="0" max="100" step="0.01" value="${data.fee_percent??''}" placeholder="Ex.: 2,99"></label>
+      <label>Taxa estimada<input class="part-fee-value" type="text" readonly value="R$ 0,00"></label>
+      <label>Valor líquido total<input class="part-net" type="text" readonly value="R$ 0,00"></label>
+    </div>
+    <div class="part-schedule ${method==='credit'?'':'hidden'}"></div>
   </div>`;
 }
 function setupPaymentPart(part){
-  const method=part.querySelector('.part-method'), card=part.querySelector('.part-card'), fee=part.querySelector('.part-fee');
-  const toggle=()=>{const credit=method.value==='credit';part.querySelector('.part-card-wrap')?.classList.toggle('hidden',!credit);part.querySelector('.part-install-wrap')?.classList.toggle('hidden',!credit);part.querySelector('.part-fee-wrap')?.classList.toggle('hidden',!credit);part.querySelectorAll('.part-net-wrap').forEach(x=>x.classList.toggle('hidden',!credit));if(credit&&card.value){const c=cards.find(x=>x.id===card.value);if(c&&fee&&!fee.value)fee.value=c.machine_fee_percent??0;}updatePaymentParts();};
-  method.addEventListener('change',toggle);card?.addEventListener('change',()=>{const c=cards.find(x=>x.id===card.value);if(c&&fee&&!fee.value)fee.value=c.machine_fee_percent??0;updatePaymentParts()});part.querySelectorAll('input,select').forEach(el=>{if(el!==method&&el!==card)el.addEventListener('input',updatePaymentParts)});part.querySelector('.part-remove')?.addEventListener('click',()=>{part.remove();renumberPaymentParts();updatePaymentParts()});toggle();
+  const method=part.querySelector('.part-method'), card=part.querySelector('.part-card'), fee=part.querySelector('.part-fee'), rate=part.querySelector('.part-rate');
+  const applyDefaults=()=>{
+    const credit=method.value==='credit';
+    part.querySelector('.part-card-wrap')?.classList.toggle('hidden',!credit);
+    part.querySelector('.part-rate-wrap')?.classList.toggle('hidden',!credit);
+    part.querySelector('.part-install-wrap')?.classList.toggle('hidden',!credit);
+    part.querySelector('.part-detail')?.classList.toggle('hidden',!credit);
+    part.querySelector('.part-schedule')?.classList.toggle('hidden',!credit);
+    if(credit){
+      const c=cards.find(x=>x.id===card?.value);
+      const r=machineRates.find(x=>x.id===rate?.value);
+      if(r && fee && !fee.value) fee.value=Number(r.credit_percent||0);
+      else if(c && fee && !fee.value) fee.value=Number(c.machine_fee_percent||0);
+    }
+    updatePaymentParts();
+  };
+  method.addEventListener('change',applyDefaults);
+  card?.addEventListener('change',()=>{const c=cards.find(x=>x.id===card.value);if(c&&fee){fee.value=c.machine_fee_percent??0}updatePaymentParts()});
+  rate?.addEventListener('change',()=>{const r=machineRates.find(x=>x.id===rate.value);if(r&&fee)fee.value=Number(r.credit_percent||0);updatePaymentParts()});
+  part.querySelectorAll('input,select').forEach(el=>{if(el!==method&&el!==card&&el!==rate)el.addEventListener('input',updatePaymentParts)});
+  part.querySelector('.part-remove')?.addEventListener('click',()=>{part.remove();renumberPaymentParts();updatePaymentParts()});
+  applyDefaults();
 }
 function renumberPaymentParts(){document.querySelectorAll('#paymentParts .payment-part').forEach((p,i)=>p.dataset.paymentIndex=i);document.querySelectorAll('#paymentParts .part-remove').forEach((b,i)=>b.classList.toggle('hidden',i===0));}
 function addPaymentPart(data={}){const wrap=$("paymentParts");if(!wrap)return;const count=wrap.querySelectorAll('.payment-part').length;wrap.insertAdjacentHTML('beforeend',paymentPartTemplate(count,data));setupPaymentPart(wrap.lastElementChild);}
+function addDefaultPartsForMultiple(){const wrap=$("paymentParts");if(!wrap)return;wrap.innerHTML="";addPaymentPart({method:'pix'});addPaymentPart({method:'credit'});}
+function installmentDate(baseDate,index){const d=new Date((baseDate||today)+"T12:00:00");d.setDate(d.getDate()+30*(index+1));return d.toISOString().slice(0,10)}
 function updatePaymentParts(){
   const box=$("paymentBreakdown"),method=$("txMethod")?.value,status=$("txStatus")?.value,target=paymentTargetAmount();
   if(!box)return;
-  const active=method==='multiple'||status==='parcial';box.classList.toggle('hidden',!active);
+  const active=method==='multiple'||status==='parcial';
+  box.classList.toggle('hidden',!active);
   $("txPaidAmountWrap")?.classList.toggle('hidden',status!=='parcial');
   const parts=[...document.querySelectorAll('#paymentParts .payment-part')];let total=0;
-  parts.forEach(p=>{const amount=+p.querySelector('.part-amount').value||0;total+=amount;const m=p.querySelector('.part-method').value;if(m==='credit'){const fee=+p.querySelector('.part-fee').value||0,feeValue=amount*fee/100,net=amount-feeValue;p.querySelector('.part-fee-value').value=money(feeValue);p.querySelector('.part-net').value=money(net)}});
+  parts.forEach(p=>{
+    const amount=+p.querySelector('.part-amount').value||0; total+=amount;
+    const m=p.querySelector('.part-method').value;
+    const detail=p.querySelector('.part-detail'),schedule=p.querySelector('.part-schedule');
+    if(m==='credit'){
+      detail?.classList.remove('hidden');schedule?.classList.remove('hidden');
+      const fee=+p.querySelector('.part-fee').value||0,inst=Math.max(1,+p.querySelector('.part-install').value||1),feeValue=amount*fee/100,net=amount-feeValue;
+      p.querySelector('.part-fee-value').value=money(feeValue);p.querySelector('.part-net').value=money(net);
+      const perGross=amount/inst,perFee=perGross*fee/100,perNet=perGross-perFee;
+      if(schedule)schedule.innerHTML=Array.from({length:Math.min(inst,24)},(_,i)=>`<div><span>${i+1}/${inst}</span><b>${money(perNet)}</b><small>${installmentDate($("txPaidDate")?.value||$("txDate")?.value||today,i)}</small></div>`).join('');
+    }else{detail?.classList.add('hidden');schedule?.classList.add('hidden')}
+  });
   const totalEl=$("paymentPartsTotal"),statusEl=$("paymentPartsStatus");if(totalEl)totalEl.textContent=money(total);
   if(statusEl){const diff=total-target;if(Math.abs(diff)<0.01&&target>0){statusEl.textContent="✓ Valores fechando corretamente.";statusEl.className="ok"}else if(target>0){statusEl.textContent=`Falta/sobra ${money(Math.abs(diff))}${diff>0?' a mais':' para completar'}.`;statusEl.className="error"}else{statusEl.textContent="Informe o valor a pagar/receber e as formas.";statusEl.className=""}}
 }
+function refreshPaymentRateOptions(){
+  document.querySelectorAll('#paymentParts .part-rate').forEach(sel=>{const current=sel.value;sel.innerHTML='<option value="">Sem taxa cadastrada</option>'+machineRates.map(r=>`<option value="${r.id}">${esc(r.name)}</option>`).join('');if(current&&machineRates.some(r=>r.id===current))sel.value=current;});
+}
 function initPaymentBreakdown(){
   const wrap=$("paymentParts");if(!wrap)return;
-  wrap.innerHTML="";addPaymentPart();
+  wrap.innerHTML="";addPaymentPart({method:'pix'});
   $("addPaymentPart")?.addEventListener('click',()=>{addPaymentPart();updatePaymentParts()});
-  $("txMethod")?.addEventListener('change',()=>{const v=$("txMethod").value;if(v==='multiple'){if(document.querySelectorAll('#paymentParts .payment-part').length<2)addPaymentPart();}else{const first=document.querySelector('#paymentParts .payment-part');if(first){first.querySelector('.part-method').value=v;first.querySelector('.part-card').value=$("txCard")?.value||'';if(v==='credit'&&$("txCard")?.value){const c=cards.find(x=>x.id===$("txCard").value);first.querySelector('.part-fee').value=c?.machine_fee_percent??first.querySelector('.part-fee').value}setupPaymentPart(first)}}updatePaymentParts()});
-  $("txStatus")?.addEventListener('change',updatePaymentParts);$("txAmount")?.addEventListener('input',updatePaymentParts);$("txPaidAmount")?.addEventListener('input',updatePaymentParts);$("txCard")?.addEventListener('change',()=>{if($("txMethod")?.value==='credit'){const p=document.querySelector('#paymentParts .payment-part');if(p){p.querySelector('.part-card').value=$("txCard").value;const c=cards.find(x=>x.id===$("txCard").value);p.querySelector('.part-fee').value=c?.machine_fee_percent??p.querySelector('.part-fee').value;updatePaymentParts()}}});
+  $("txMethod")?.addEventListener('change',()=>{
+    const v=$("txMethod").value;
+    if(v==='multiple') addDefaultPartsForMultiple();
+    else if(v==='credit'){
+      const first=document.querySelector('#paymentParts .payment-part');
+      if(first){first.querySelector('.part-method').value='credit';first.querySelector('.part-card').value=$("txCard")?.value||'';setupPaymentPart(first)}
+      else addPaymentPart({method:'credit'});
+    } else {
+      const first=document.querySelector('#paymentParts .payment-part');
+      if(first){first.querySelector('.part-method').value=v;setupPaymentPart(first)}
+    }
+    updatePaymentParts();
+  });
+  $("txStatus")?.addEventListener('change',()=>{
+    const status=$("txStatus").value;const box=$("paymentBreakdown");
+    if(status==='parcial'){box?.classList.remove('hidden');$("txPaidAmountWrap")?.classList.remove('hidden');if(!document.querySelector('#paymentParts .payment-part'))addPaymentPart({method:'pix'});}
+    updatePaymentParts();
+  });
+  $("txAmount")?.addEventListener('input',updatePaymentParts);$("txPaidAmount")?.addEventListener('input',updatePaymentParts);$("txPaidDate")?.addEventListener('change',updatePaymentParts);$("txDate")?.addEventListener('change',updatePaymentParts);
+  $("txCard")?.addEventListener('change',()=>{const p=document.querySelector('#paymentParts .payment-part');if(p&&$("txMethod")?.value==='credit'){p.querySelector('.part-card').value=$("txCard").value;const c=cards.find(x=>x.id===$("txCard").value);if(c)p.querySelector('.part-fee').value=c.machine_fee_percent??0;updatePaymentParts()}});
   updatePaymentParts();
 }
-function collectPaymentParts(){return [...document.querySelectorAll('#paymentParts .payment-part')].map(p=>({method:p.querySelector('.part-method').value,amount:+p.querySelector('.part-amount').value||0,card_id:p.querySelector('.part-card')?.value||null,installments:+p.querySelector('.part-install')?.value||1,fee_percent:+p.querySelector('.part-fee')?.value||0})).filter(x=>x.amount>0)}
+function collectPaymentParts(){return [...document.querySelectorAll('#paymentParts .payment-part')].map(p=>({method:p.querySelector('.part-method').value,amount:+p.querySelector('.part-amount').value||0,card_id:p.querySelector('.part-card')?.value||null,rate_id:p.querySelector('.part-rate')?.value||null,installments:+p.querySelector('.part-install')?.value||1,fee_percent:+p.querySelector('.part-fee')?.value||0})).filter(x=>x.amount>0)}
+function clearTxForm(){editingTxId=null;$("txForm")?.reset();$("txDate").value=today;$("txPaidDate").value="";$("txPaidAmount").value="";$("txMetalValue").value="";$("txInitialKg").value="";$("txFinalKg").value="";$("txForm button[type=submit]")?.textContent="Salvar lançamento";$("txMsg").textContent="";initPaymentBreakdown();updateMetalFields();}
+async function editTx(id){
+  const t=txs.find(x=>x.id===id);if(!t)return;
+  editingTxId=id;page('lancamentos');
+  $("txType").value=t.type;fillCategorySelects();$("txCat").value=t.category_id||"";updateMetalFields();
+  $("txAmount").value=t.original_amount??t.amount??0;$("txDate").value=t.competence_date||t.transaction_date||today;$("txPaidDate").value=t.paid_date||"";$("txSubcategory").value=t.subcategory||"";$("txAccount").value=t.account_id||"";$("txCard").value=t.card_id||"";$("txMethod").value=t.payment_method||"pix";$("txStatus").value=t.status||"pago";$("txName").value=t.name||"";$("txDesc").value=t.description||"";$("txInstall").value=t.installment_total||1;$("txPaidAmount").value=t.payment_received_amount||t.amount||"";$("txNotes").value=t.notes||"";$("txMetalValue").value=t.metal_value||"";$("txInitialKg").value=t.initial_kg||"";$("txFinalKg").value=t.final_kg||"";
+  const wrap=$("paymentParts");wrap.innerHTML="";const parts=Array.isArray(t.payment_parts)&&t.payment_parts.length?t.payment_parts:[{method:t.payment_method||'pix',amount:t.amount,card_id:t.card_id,installments:t.installment_total||1,fee_percent:t.fee_percent||0,rate_id:t.rate_id||null}];parts.forEach(addPaymentPart);updatePaymentParts();$("txForm button[type=submit]").textContent="Salvar alterações";
+}
 async function saveTx(e){
  e.preventDefault();
  const total=+$('txAmount').value||0,status=$('txStatus').value,method=$('txMethod').value;
@@ -274,22 +362,47 @@ async function saveTx(e){
  const target=status==='parcial'?(+$('txPaidAmount').value||0):total;
  if(status==='parcial'&&target<=0)return msg("txMsg","Informe quanto foi pago/recebido agora.");
  let parts=collectPaymentParts();
- if(status==='pendente')parts=[];
- if(method!=='multiple'&&parts.length===0&&status!=='pendente')parts=[{method,amount:target,card_id:$('txCard').value||null,installments:method==='credit'?(+$('txInstall').value||1):1,fee_percent:0}];
+ if(status==='pendente' && !editingTxId)parts=[];
+ if(method!=='multiple'&&parts.length===0&&status!=='pendente')parts=[{method,amount:target,card_id:$('txCard').value||null,rate_id:null,installments:method==='credit'?(+$('txInstall').value||1):1,fee_percent:method==='credit'?(+(cards.find(c=>c.id===$('txCard').value)?.machine_fee_percent||0)):0}];
  if(status!=='pendente'){const sum=parts.reduce((s,p)=>s+p.amount,0);if(Math.abs(sum-target)>0.01)return msg("txMsg",`As formas de pagamento somam ${money(sum)}, mas o valor a ${status==='parcial'?'pagar/receber agora':'pagar/receber'} é ${money(target)}.`)}
- let n=+$('txInstall').value||1,g=crypto.randomUUID(),attachmentUrl=null;const file=$('txAttachmentFile')?.files?.[0];
+ const g=editingTxId||crypto.randomUUID();let attachmentUrl=txs.find(t=>t.id===editingTxId)?.attachment_url||null;const file=$('txAttachmentFile')?.files?.[0];
  if(file){try{const safe=file.name.replace(/[^a-zA-Z0-9._-]/g,"_");const rr=storageRef(storage,`users/${user.uid}/comprovantes/${g}-${safe}`);await uploadBytes(rr,file);attachmentUrl=await getDownloadURL(rr)}catch(err){return msg("txMsg","Não foi possível enviar o comprovante: "+friendlyError(err))}}
- const base={user_id:user.uid,type:$('txType').value,amount:total,transaction_date:$('txDate').value,competence_date:$('txDate').value,paid_date:$('txPaidDate').value||null,category_id:$('txCat').value,subcategory:$('txSubcategory').value||null,account_id:$('txAccount').value||null,card_id:$('txCard').value||null,payment_method:method,status,name:$('txName').value.trim(),description:$('txDesc').value.trim()||null,notes:$('txNotes').value||null,attachment_url:attachmentUrl,recurrence:$('txRecurring').value,group_id:g,payment_parts:parts,payment_received_amount:target,payment_fee_total:parts.reduce((s,p)=>s+p.amount*(p.fee_percent||0)/100,0)};
- let rows=[];for(let i=0;i<n;i++){let d=new Date($('txDate').value+"T12:00:00");d.setMonth(d.getMonth()+i);let pd=base.paid_date;if(pd&&i){let x=new Date(pd+"T12:00:00");x.setMonth(x.getMonth()+i);pd=x.toISOString().slice(0,10)}rows.push({...base,transaction_date:d.toISOString().slice(0,10),competence_date:d.toISOString().slice(0,10),paid_date:pd,installment_number:i+1,installment_total:n})}
- let r=await sb.from("transactions").insert(rows);msg("txMsg",r.error?.message||"Lançamento salvo.");if(!r.error){$('txForm').reset();$('txDate').value=today;$('txPaidDate').value="";$('txPaidAmount').value="";initPaymentBreakdown();await load()}
+ const categoryName=categories.find(c=>c.id===$('txCat').value)?.name||"";
+ const base={user_id:user.uid,type:$('txType').value,amount:total,original_amount:total,transaction_date:$('txDate').value,competence_date:$('txDate').value,paid_date:$('txPaidDate').value||null,category_id:$('txCat').value,subcategory:$('txSubcategory').value||null,account_id:$('txAccount').value||null,card_id:$('txCard').value||null,payment_method:method,status,name:$('txName').value.trim(),description:$('txDesc').value.trim()||null,notes:$('txNotes').value||null,attachment_url:attachmentUrl,recurrence:$('txRecurring').value,group_id:g,payment_parts:parts,payment_received_amount:target,payment_fee_total:parts.reduce((s,p)=>s+p.amount*(p.fee_percent||0)/100,0),metal_value:+($("txMetalValue")?.value||0)||0,initial_kg:+($("txInitialKg")?.value||0)||0,final_kg:+($("txFinalKg")?.value||0)||0,category_name:categoryName};
+ if(editingTxId){
+   const ref=doc(db,"transactions",editingTxId);const current=txs.find(t=>t.id===editingTxId)||{};
+   const fee=parts[0]?.fee_percent||0, net=total-total*fee/100;
+   await updateDoc(ref,{...base,amount:net,original_amount:total,fee_percent:fee,edited_at:serverTimestamp(),installment_number:current.installment_number||1,installment_total:current.installment_total||1});
+   msg("txMsg","Lançamento atualizado.");clearTxForm();await load();return;
+ }
+ let rows=[];
+ for(const part of parts.length?parts:[{method,amount:target,card_id:$('txCard').value||null,rate_id:null,installments:1,fee_percent:0}]){
+   const inst=Math.max(1,part.installments||1);
+   if(part.method==='credit' && inst>1){
+     const grossPart=part.amount/inst,feeValue=grossPart*(part.fee_percent||0)/100,netPart=grossPart-feeValue;
+     for(let i=0;i<inst;i++){
+       const d=installmentDate($('txPaidDate').value||$('txDate').value||today,i);
+       rows.push({...base,amount:netPart,original_amount:grossPart,transaction_date:d,competence_date:$('txDate').value,paid_date:d,status:'pendente',payment_method:'credit',card_id:part.card_id||$('txCard').value||null,rate_id:part.rate_id||null,fee_percent:part.fee_percent||0,payment_fee_total:feeValue,payment_received_amount:netPart,installment_number:i+1,installment_total:inst,group_id:g});
+     }
+   }else if(part.method==='credit'){
+     const gross=part.amount,feeValue=gross*(part.fee_percent||0)/100,net=gross-feeValue,d=installmentDate($('txPaidDate').value||$('txDate').value||today,0);
+     rows.push({...base,amount:net,original_amount:gross,transaction_date:d,competence_date:$('txDate').value,paid_date:d,status:'pendente',payment_method:'credit',card_id:part.card_id||$('txCard').value||null,rate_id:part.rate_id||null,fee_percent:part.fee_percent||0,payment_fee_total:feeValue,payment_received_amount:net,installment_number:1,installment_total:1,group_id:g});
+   }else{
+     rows.push({...base,amount:part.amount,original_amount:part.amount,transaction_date:$('txPaidDate').value||$('txDate').value,competence_date:$('txDate').value,paid_date:$('txPaidDate').value||$('txDate').value,status:status==='parcial'?'pago':status,payment_method:part.method,card_id:part.card_id||null,rate_id:part.rate_id||null,fee_percent:part.fee_percent||0,payment_received_amount:part.amount,installment_number:1,installment_total:1,group_id:g});
+   }
+ }
+ let r=await sb.from("transactions").insert(rows);msg("txMsg",r.error?.message||"Lançamento salvo.");if(!r.error){clearTxForm();await load()}
 }
+async function saveMachineRate(e){e.preventDefault();const name=$("rateName").value.trim();if(!name)return msg("rateMsg","Informe o nome da maquininha.");const r=await sb.from("machine_rates").insert({user_id:user.uid,name,credit_percent:+$("rateCredit").value||0,debit_percent:+$("rateDebit").value||0,pix_percent:+$("ratePix").value||0,active:true});msg("rateMsg",r.error?.message||"Taxa cadastrada.");if(!r.error){$("rateForm").reset();$("rateCredit").value=0;$("rateDebit").value=0;$("ratePix").value=0;await load()}}
+async function deleteMachineRate(id){if(!confirm("Excluir esta taxa?"))return;try{await deleteDoc(doc(db,"machine_rates",id));await load()}catch(err){msg("rateMsg",friendlyError(err))}}
+function renderMachineRates(){const el=$("rateBody");if(!el)return;el.innerHTML=machineRates.map(r=>`<div class="rate-row"><div><b>${esc(r.name)}</b><small>Crédito: ${Number(r.credit_percent||0).toFixed(2)}% · Débito: ${Number(r.debit_percent||0).toFixed(2)}% · PIX: ${Number(r.pix_percent||0).toFixed(2)}%</small></div><button type="button" class="danger" onclick="deleteMachineRate('${r.id}')">Excluir</button></div>`).join("")||'<div class="empty-rate">Nenhuma taxa cadastrada.</div>'}
 async function saveCard(e){e.preventDefault();let r=await sb.from("cards").insert({user_id:user.uid,name:$("cardName").value,limit_amount:+$("cardLimit").value,closing_day:+$("cardClose").value,due_day:+$("cardDue").value,last4:$("cardLast4")?.value||null,machine_fee_percent:+$("cardFee")?.value||0,active:true});msg("cardMsg",r.error?.message||"Cartão cadastrado.");if(!r.error){$("cardForm").reset();await load()}}
 async function saveRec(e){e.preventDefault();let r=await sb.from("recurring").insert({user_id:user.uid,type:$("recType")?.value||"saida",description:$("recDesc").value,amount:+$("recAmount").value,category_id:$("recCat").value,due_day:+$("recDay").value,start_date:$("recStart").value,end_date:$("recEnd").value||null});msg("recMsg",r.error?.message||"Cadastrado.");if(!r.error){$("recForm").reset();await load()}}
 async function saveGoal(e){e.preventDefault();let r=await sb.from("goals").insert({user_id:user.uid,name:$("goalName").value,target_amount:+$("goalTarget").value,current_amount:+$("goalCurrent").value||0,deadline:$("goalDate").value||null});msg("goalMsg",r.error?.message||"Meta cadastrada.");if(!r.error){$("goalForm").reset();await load()}}
 async function saveTransfer(e){e.preventDefault();const from=$("transferFrom").value,to=$("transferTo").value,amount=+$("transferAmount").value;if(!from||!to||from===to||!amount)return msg("transferMsg","Escolha contas diferentes e informe um valor.");const group=crypto.randomUUID(),date=$("transferDate").value||today,desc=$("transferDesc").value||"Transferência entre contas";const rows=[{user_id:user.uid,type:"saida",amount,transaction_date:date,competence_date:date,paid_date:date,account_id:from,status:"pago",description:desc,notes:"Transferência - origem",payment_method:"transfer",transfer_group_id:group},{user_id:user.uid,type:"entrada",amount,transaction_date:date,competence_date:date,paid_date:date,account_id:to,status:"pago",description:desc,notes:"Transferência - destino",payment_method:"transfer",transfer_group_id:group}];const r=await sb.from("transactions").insert(rows);msg("transferMsg",r.error?.message||"Transferência realizada.");if(!r.error){$("transferForm").reset();$("transferDate").value=today;await load()}}
 async function saveAccount(e){e.preventDefault();let r=await sb.from("accounts").insert({user_id:user.uid,name:$("accountName").value,type:$("accountType").value,initial_balance:+$("accountInitial").value||0});msg("accountMsg",r.error?.message||"Conta cadastrada.");if(!r.error){$("accountForm").reset();await load()}}
 function paymentSummary(t){const p=Array.isArray(t.payment_parts)?t.payment_parts:[];if(!p.length)return t.payment_method||"-";return p.map(x=>{let label=x.method==='credit'?`Cartão${x.installments>1?` ${x.installments}x`:''}`:({pix:'PIX',debit:'Débito',cash:'Dinheiro',transfer:'Transferência',boleto:'Boleto',other:'Outro'})[x.method]||x.method;return `${label}: ${money(x.amount)}${x.method==='credit'&&x.fee_percent?` · taxa ${x.fee_percent}%`:''}`}).join(' + ')}
-function render(){$("txBody").innerHTML=txs.slice(0,200).map(t=>`<tr><td>${t.transaction_date}</td><td>${t.type}</td><td>${esc(t.name||t.description||"Sem nome")}</td><td>${esc(t.categories?.name||"-")}</td><td>${money(t.amount)}</td><td>${t.status}</td><td>${t.installment_total>1?t.installment_number+"/"+t.installment_total:"-"}</td></tr>`).join("");$("cardBody").innerHTML=cards.map(c=>{let u=txs.filter(t=>t.card_id===c.id&&t.type==="saida"&&t.transaction_date.startsWith(thisMonth)).reduce((a,t)=>a+ +t.amount,0);return`<tr><td>${esc(c.name)}</td><td>${money(c.limit_amount)}</td><td>${money(u)}</td><td>${money(Math.max(0,c.limit_amount-u))}</td><td>${c.closing_day}</td><td>${c.due_day}</td></tr>`}).join("");$("recBody").innerHTML=recurring.map(r=>`<tr><td>${esc(r.description)}</td><td>${money(r.amount)}</td><td>${esc(r.categories?.name||"-")}</td><td>${r.due_day}</td><td>${r.start_date}</td><td>${r.end_date||"-"}</td></tr>`).join("");$("goals").innerHTML=goalsData();$("accountBody").innerHTML=accounts.map(a=>{let m=txs.filter(t=>t.account_id===a.id).reduce((s,t)=>s+(t.type==="entrada"?1:-1)*+t.amount,0);return`<tr><td>${esc(a.name)}</td><td>${esc(a.type)}</td><td>${money(a.initial_balance)}</td><td>${money(m)}</td><td>${money(+a.initial_balance+m)}</td></tr>`}).join("");dashboard();report()}
+function render(){$("txBody").innerHTML=txs.slice(0,200).map(t=>`<tr><td>${t.transaction_date}</td><td>${t.type}</td><td>${esc(t.name||t.description||"Sem nome")}</td><td>${esc(t.categories?.name||"-")}</td><td>${money(t.amount)}${t.original_amount&&Math.abs(Number(t.original_amount)-Number(t.amount))>0.001?`<small class="cell-sub">Bruto ${money(t.original_amount)}</small>`:""}</td><td>${t.status}<small class="cell-sub">${esc(paymentSummary(t))}</small></td><td>${t.installment_total>1?t.installment_number+"/"+t.installment_total:"-"}</td><td><button type="button" class="secondary small-btn" onclick="editTx('${t.id}')">Editar</button></td></tr>`).join("");$("cardBody").innerHTML=cards.map(c=>{let u=txs.filter(t=>t.card_id===c.id&&t.type==="saida"&&t.transaction_date.startsWith(thisMonth)).reduce((a,t)=>a+ +t.amount,0);return`<tr><td>${esc(c.name)}</td><td>${money(c.limit_amount)}</td><td>${money(u)}</td><td>${money(Math.max(0,c.limit_amount-u))}</td><td>${c.closing_day}</td><td>${c.due_day}</td></tr>`}).join("");$("recBody").innerHTML=recurring.map(r=>`<tr><td>${esc(r.description)}</td><td>${money(r.amount)}</td><td>${esc(r.categories?.name||"-")}</td><td>${r.due_day}</td><td>${r.start_date}</td><td>${r.end_date||"-"}</td></tr>`).join("");$("goals").innerHTML=goalsData();$("accountBody").innerHTML=accounts.map(a=>{let m=txs.filter(t=>t.account_id===a.id).reduce((s,t)=>s+(t.type==="entrada"?1:-1)*+t.amount,0);return`<tr><td>${esc(a.name)}</td><td>${esc(a.type)}</td><td>${money(a.initial_balance)}</td><td>${money(m)}</td><td>${money(+a.initial_balance+m)}</td></tr>`}).join("");dashboard();report()}
 function goalsData(){return goalsList.map(g=>{let p=Math.min(100,+g.current_amount/+g.target_amount*100);return`<div class="goal"><h3>${esc(g.name)}</h3><b>${money(g.current_amount)} / ${money(g.target_amount)}</b><div class="progress"><div style="width:${p}%"></div></div>${p.toFixed(1)}%${g.deadline?" · prazo "+g.deadline:""}</div>`}).join("")}
 function dashboard(){let m=$("dashMonth").value||thisMonth,r=txs.filter(t=>t.transaction_date.startsWith(m)),ins=r.filter(t=>t.type==="entrada").reduce((s,t)=>s+ +t.amount,0),out=r.filter(t=>t.type==="saida").reduce((s,t)=>s+ +t.amount,0),pending=txs.filter(t=>t.type==="saida"&&t.status==="pendente"&&t.transaction_date>=today).reduce((s,t)=>s+ +t.amount,0);$("inTotal").textContent=money(ins);$("outTotal").textContent=money(out);$("result").textContent=money(ins-out);$("available").textContent=money(ins-out-pending);let daily={};r.forEach(t=>daily[t.transaction_date]=(daily[t.transaction_date]||0)+(t.type==="entrada"?+t.amount:-+t.amount));let cc={};r.filter(t=>t.type==="saida").forEach(t=>cc[t.categories?.name||"Outros"]=(cc[t.categories?.name||"Outros"]||0)+ +t.amount);flowChart?.destroy();catChart?.destroy();flowChart=new Chart($("flow"),{type:"line",data:{labels:Object.keys(daily),datasets:[{label:"Resultado",data:Object.values(daily)}]}});catChart=new Chart($("cats"),{type:"doughnut",data:{labels:Object.keys(cc),datasets:[{data:Object.values(cc)}]}});$("due").innerHTML=txs.filter(t=>t.type==="saida"&&t.status==="pendente").slice(0,5).map(t=>`<p>${t.transaction_date} · ${esc(t.description)}<br><b>${money(t.amount)}</b></p>`).join("")||"Nenhuma.";$("cardDash").innerHTML=cards.map(c=>`<p>${esc(c.name)} · ${money(txs.filter(t=>t.card_id===c.id&&t.type==="saida"&&t.transaction_date.startsWith(m)).reduce((s,t)=>s+ +t.amount,0))}</p>`).join("")||"Nenhum.";$("goalDash").innerHTML=goalsList.slice(0,5).map(g=>`<p>${esc(g.name)} · ${(g.current_amount/g.target_amount*100).toFixed(0)}%</p>`).join("")||"Nenhuma."}
 function report(){let m=$("reportMonth").value||thisMonth,r=txs.filter(t=>t.transaction_date.startsWith(m)),i=r.filter(t=>t.type==="entrada").reduce((s,t)=>s+ +t.amount,0),o=r.filter(t=>t.type==="saida").reduce((s,t)=>s+ +t.amount,0);$("summary").innerHTML=`<p>Entradas <b>${money(i)}</b> · Saídas <b>${money(o)}</b> · Resultado <b>${money(i-o)}</b></p>`;$("reportBody").innerHTML=r.map(t=>`<tr><td>${t.transaction_date}</td><td>${t.type}</td><td>${esc(t.description)}</td><td>${esc(t.categories?.name||"-")}</td><td>${money(t.amount)}</td><td>${t.status}</td></tr>`).join("")}
