@@ -117,9 +117,37 @@ document.addEventListener("DOMContentLoaded",async()=>{
   }catch(err){console.error(err);loginView();msg("authMsg",friendlyError(err))}
 });
 function loginView(){$("loginView").classList.remove("hidden");$("app").classList.add("hidden")}
-async function start(u){user=u;const r=await getDoc(doc(db,"users",u.uid));$("userName").textContent=r.exists()?r.data().name:(u.displayName||u.email);$("loginView").classList.add("hidden");$("app").classList.remove("hidden");await load();page("dashboard")}
-async function login(e){e.preventDefault();msg("authMsg","");const r=await sb.auth.signInWithPassword({email:$("loginEmail").value.trim(),password:$("loginPassword").value});if(r.error)msg("authMsg",friendlyError(r.error));}
-async function signup(e){e.preventDefault();msg("authMsg","");const r=await sb.auth.signUp({email:$("signupEmail").value.trim(),password:$("signupPassword").value,options:{data:{name:$("signupName").value.trim()}}});if(r.error){msg("authMsg",friendlyError(r.error));return}msg("authMsg",r.data.session?"Conta criada e acesso liberado.":"Conta criada. Se a confirmação de e-mail estiver ativa, verifique sua caixa de entrada.");}
+async function start(u){
+  user=u;
+  $("loginView").classList.add("hidden");
+  $("app").classList.remove("hidden");
+  try{
+    const r=await getDoc(doc(db,"users",u.uid));
+    $("userName").textContent=r.exists()?r.data().name:(u.displayName||u.email);
+  }catch(err){
+    console.warn("Não foi possível carregar o perfil do usuário:",err);
+    $("userName").textContent=u.displayName||u.email||"Usuário";
+  }
+  try{await load();}
+  catch(err){
+    console.error("Erro ao carregar dados financeiros:",err);
+    msg("authMsg","Login realizado. Alguns dados não puderam ser carregados; verifique as permissões do Firestore.");
+  }
+  page("dashboard");
+}
+async function login(e){
+  e.preventDefault();msg("authMsg","");
+  const r=await sb.auth.signInWithPassword({email:$("loginEmail").value.trim(),password:$("loginPassword").value});
+  if(r.error){msg("authMsg",friendlyError(r.error));return;}
+  if(r.data?.user) await start(r.data.user);
+}
+async function signup(e){
+  e.preventDefault();msg("authMsg","");
+  const r=await sb.auth.signUp({email:$("signupEmail").value.trim(),password:$("signupPassword").value,options:{data:{name:$("signupName").value.trim()}}});
+  if(r.error){msg("authMsg",friendlyError(r.error));return;}
+  if(r.data?.user) await start(r.data.user);
+  else msg("authMsg","Conta criada. Se a confirmação de e-mail estiver ativa, verifique sua caixa de entrada.");
+}
 async function deduplicateCategories(rows){
   const seen=new Map();
   const duplicates=[];
