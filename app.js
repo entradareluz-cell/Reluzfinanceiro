@@ -12,6 +12,8 @@ import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from "http
 const cfg=window.FIREBASE_CONFIG||{};
 const firebaseReady=cfg.apiKey&&!String(cfg.apiKey).includes("COLE_AQUI")&&cfg.projectId&&cfg.projectId!=="SEU-PROJETO";
 let firebaseApp,auth,db,storage;
+let editingTxId = null;
+let machineRates = [];
 if(firebaseReady){firebaseApp=initializeApp(cfg);auth=getAuth(firebaseApp);db=getFirestore(firebaseApp);storage=getStorage(firebaseApp);}
 
 const defaults=[['Salário','entrada'],['Extra','entrada'],['Reembolso','entrada'],['Outros recebimentos','entrada'],['Casa','saida'],['Mercado','saida'],['Alimentação','saida'],['Carro','saida'],['Combustível','saida'],['Contas','saida'],['Celular/Internet','saida'],['Cartão','saida'],['Lazer','saida'],['Compras','saida'],['Pets','saida'],['Família','saida'],['Investimentos','saida'],['Outros','saida']];
@@ -95,7 +97,7 @@ const sb={
  }
 };
 
-let user,categories=[],accounts=[],cards=[],recurring=[],goalsList=[],txs=[],machineRates=[],flowChart,catChart;
+let user,categories=[],accounts=[],cards=[],recurring=[],goalsList=[],txs=[],flowChart,catChart,machineRates=[];
 const $=x=>document.getElementById(x),today=new Date().toISOString().slice(0,10),thisMonth=today.slice(0,7);
 const money=n=>Number(n||0).toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
 const esc=s=>String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]));
@@ -109,78 +111,17 @@ document.addEventListener("DOMContentLoaded",async()=>{
   $("dashMonth").onchange=dashboard;$("reportMonth").onchange=report;$("transferForm")?.addEventListener("submit",saveTransfer);$("excel").onclick=excel;$("pdf").onclick=pdf;
   document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>page(b.dataset.page));
   try{
-    if(!firebaseReady) throw new Error("Configuração do Firebase não carregada. Verifique o config.js.");
-    // A sessão é controlada exclusivamente pelo listener. Isso evita uma
-    // corrida entre o submit do login e o carregamento inicial do aplicativo.
-    sb.auth.onAuthStateChange(async(e,s)=>{
-      try{
-        if(s?.user){
-          // O login/signup também chama start() diretamente. O listener só garante
-          // a restauração automática de uma sessão já existente.
-          if($("app").classList.contains("hidden")) await start(s.user);
-        } else if(!user){
-          loginView();
-        }
-      }catch(err){
-        console.error("Falha ao abrir a sessão",err);
-        if(s?.user){
-          user=s.user;
-          $("loginView").classList.add("hidden");
-          $("app").classList.remove("hidden");
-          page("dashboard");
-        }
-        msg("authMsg",friendlyError(err));
-      }
-    });
-  }catch(err){console.error("Falha ao inicializar Firebase",err);loginView();msg("authMsg",friendlyError(err))}
+    if(!firebaseReady) throw new Error("Configuração do Firebase não carregada. Verifique o arquivo config.js.");
+    const {data,error}=await sb.auth.getSession();
+    if(error) throw error;
+    if(data.session) await start(data.session.user); else loginView();
+    sb.auth.onAuthStateChange(async(e,s)=>{try{if(s) await start(s.user); else loginView()}catch(err){console.error("Falha ao abrir a sessão",err);loginView();msg("authMsg",friendlyError(err))}});
+  }catch(err){console.error(err);loginView();msg("authMsg",friendlyError(err))}
 });
 function loginView(){$("loginView").classList.remove("hidden");$("app").classList.add("hidden")}
-async function start(u){
-  user=u;
-  $("loginView").classList.add("hidden");
-  $("app").classList.remove("hidden");
-  try{
-    const r=await getDoc(doc(db,"users",u.uid));
-    $("userName").textContent=r.exists()?r.data().name:(u.displayName||u.email);
-  }catch(err){
-    console.warn("Não foi possível carregar o perfil do usuário:",err);
-    $("userName").textContent=u.displayName||u.email||"Usuário";
-  }
-  try{await load();}
-  catch(err){
-    console.error("Erro ao carregar dados financeiros:",err);
-    msg("authMsg","Login realizado. Alguns dados não puderam ser carregados; verifique as permissões do Firestore.");
-  }
-  page("dashboard");
-}
-async function login(e){
-  e.preventDefault();
-  msg("authMsg","Entrando...");
-  const email=$("loginEmail").value.trim();
-  const password=$("loginPassword").value;
-  if(!email||!password){msg("authMsg","Informe e-mail e senha.");return;}
-  try{
-    const r=await sb.auth.signInWithPassword({email,password});
-    if(r.error){msg("authMsg",friendlyError(r.error));return;}
-    if(r.data?.user){
-      // Abre o sistema imediatamente. Não dependemos do listener para a transição.
-      await start(r.data.user);
-    } else {
-      msg("authMsg","Login realizado, mas o Firebase não retornou o usuário. Tente novamente.");
-    }
-  }catch(err){console.error("Erro no login",err);msg("authMsg",friendlyError(err));}
-}
-async function signup(e){
-  e.preventDefault();
-  msg("authMsg","Criando sua conta...");
-  const r=await sb.auth.signUp({email:$("signupEmail").value.trim(),password:$("signupPassword").value,options:{data:{name:$("signupName").value.trim()}}});
-  if(r.error){msg("authMsg",friendlyError(r.error));return;}
-  if(r.data?.user){
-    await start(r.data.user);
-  } else {
-    msg("authMsg","Conta criada. Se a confirmação de e-mail estiver ativa, verifique sua caixa de entrada.");
-  }
-}
+async function start(u){user=u;const r=await getDoc(doc(db,"users",u.uid));$("userName").textContent=r.exists()?r.data().name:(u.displayName||u.email);$("loginView").classList.add("hidden");$("app").classList.remove("hidden");await load();page("dashboard")}
+async function login(e){e.preventDefault();msg("authMsg","");const r=await sb.auth.signInWithPassword({email:$("loginEmail").value.trim(),password:$("loginPassword").value});if(r.error)msg("authMsg",friendlyError(r.error));}
+async function signup(e){e.preventDefault();msg("authMsg","");const r=await sb.auth.signUp({email:$("signupEmail").value.trim(),password:$("signupPassword").value,options:{data:{name:$("signupName").value.trim()}}});if(r.error){msg("authMsg",friendlyError(r.error));return}msg("authMsg",r.data.session?"Conta criada e acesso liberado.":"Conta criada. Se a confirmação de e-mail estiver ativa, verifique sua caixa de entrada.");}
 async function deduplicateCategories(rows){
   const seen=new Map();
   const duplicates=[];
