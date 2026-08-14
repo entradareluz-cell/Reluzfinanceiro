@@ -79,33 +79,9 @@ Publique também `storage.rules` em Firebase Storage > Rules. O upload de compro
 ## Correção de categorias
 As consultas de dados agora são filtradas por `user_id` antes de chegar ao Firestore, e o cadastro de categorias grava diretamente com o UID do usuário. Isso evita o bloqueio das Rules por consultas não filtradas.
 
-## Campos especiais para a categoria Pedido
-Quando a categoria selecionada no lançamento for **Pedido**, o formulário exibe automaticamente:
-- Valor do metal
-- KG inicial
-- KG final
-
-Esses dados são gravados no documento do lançamento nos campos `metal_value`, `initial_kg` e `final_kg`. Para outras categorias, esses campos permanecem ocultos e não são gravados.
-
-## Atualizações desta versão
-
-- Relatórios de pedidos agora exibem valor do metal, KG inicial e KG final.
-- Exportação Excel inclui os dados de metal, recebimento e classificação DRE.
-- PDF mensal inclui DRE e detalhamento de pedidos/recebimentos.
-- DRE empresarial com receita bruta, outras receitas, custos, despesas operacionais, despesas financeiras, resultado operacional e resultado líquido.
-- Lançamentos possuem classificação DRE para permitir uma demonstração mais correta.
-- Entradas podem ser recebidas por até duas formas simultâneas, por exemplo PIX + cartão de crédito, PIX + boleto ou dinheiro + PIX.
-- Cada forma de recebimento possui valor próprio; cartão de crédito pode informar número de parcelas e cartão utilizado.
-- O sistema valida que a soma das formas de recebimento seja exatamente igual ao valor total da entrada.
-- Uso de múltiplas formas também aparece nos relatórios e no Excel.
-
-
-## Atualizações — parcelamento e taxas de maquininha
-- Cada cartão pode ter uma taxa da maquininha (%) cadastrada.
-- Entradas no cartão podem ser parceladas automaticamente.
-- O sistema calcula a taxa em cada parcela e grava valor bruto, taxa e valor líquido.
-- A primeira parcela pode ficar recebida e as futuras como pendentes.
-- O relatório e o Excel exibem bruto, taxa e líquido.
-- O status **Pagamento parcial** abre automaticamente a caixa de formas de pagamento.
-- No pagamento parcial, informe o valor pago/recebido agora e distribua em até duas formas.
-- PIX, boleto, dinheiro e cartão podem ser combinados; cartão aceita parcelamento e taxa cadastrada.
+### Recebimentos e pagamentos em múltiplas formas
+- Status `Pagamento parcial` abre automaticamente o detalhamento.
+- `Múltiplas formas` permite dividir o valor entre PIX, cartão, boleto, dinheiro etc.
+- Cada forma possui seu próprio valor.
+- Cartão permite parcelas e taxa da maquininha; a taxa e o líquido estimado são calculados na tela.
+- Cartões podem ter uma taxa padrão cadastrada e essa taxa é sugerida automaticamente no lançamento.
