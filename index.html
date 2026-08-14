@@ -1,68 +1,109 @@
-<!doctype html><html lang="pt-BR"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Meu Financeiro</title><link rel="stylesheet" href="style.css">
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Reluz Financeiro</title>
+  <meta name="theme-color" content="#0b1220">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="toast"></div>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4"></script>
-<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script></head><body>
-<div id="loginView" class="auth">
-  <div class="auth-shell">
-    <section class="auth-visual">
-      <div class="brand-mark">R$</div>
-      <div class="eyebrow">RELuz • FINANCEIRO</div>
-      <h1>Seu dinheiro.<br><span>Sob controle.</span></h1>
-      <p>Uma experiência financeira simples, elegante e segura para acompanhar sua vida financeira em um só lugar.</p>
-      <div class="auth-features">
-        <div><strong>01</strong><span>Dashboard inteligente</span></div>
-        <div><strong>02</strong><span>Controle de gastos</span></div>
-        <div><strong>03</strong><span>Relatórios completos</span></div>
+  <section id="authScreen" class="auth-shell">
+    <div class="auth-orb orb-a"></div><div class="auth-orb orb-b"></div>
+    <div class="auth-card">
+      <div class="brand brand-center"><span class="brand-mark">R$</span><div><b>RELUZ</b><small>FINANCEIRO</small></div></div>
+      <div class="auth-copy">
+        <span class="eyebrow">CONTROLE FINANCEIRO</span>
+        <h1>Seu dinheiro.<br><span>Mais claro.</span></h1>
+        <p>Organize contas, cartões, metas e lançamentos em um só lugar.</p>
       </div>
-      <div class="auth-orb orb-one"></div><div class="auth-orb orb-two"></div>
-    </section>
-    <section class="card authcard">
-      <div class="auth-logo-row"><div class="mini-logo">💰</div><div><strong>Meu Financeiro</strong><small>Área segura</small></div></div>
-      <div class="auth-heading"><h2>Acesse sua conta</h2><p>Entre para continuar de onde parou.</p></div>
       <form id="loginForm" class="auth-form">
-        <label>E-mail<input id="loginEmail" type="email" placeholder="voce@exemplo.com" autocomplete="email" required></label>
-        <label>Senha<input id="loginPassword" type="password" placeholder="••••••••" autocomplete="current-password" required></label>
-        <button class="auth-primary" type="submit">Entrar na conta <span>→</span></button>
+        <label>E-mail<input id="loginEmail" type="email" autocomplete="email" placeholder="seu@email.com" required></label>
+        <label>Senha<input id="loginPassword" type="password" autocomplete="current-password" placeholder="••••••••" required></label>
+        <button class="primary wide" type="submit">Entrar <span>→</span></button>
       </form>
       <div class="auth-divider"><span>ou</span></div>
-      <div class="signup-box">
-        <div><strong>Primeiro acesso?</strong><p>Crie sua conta gratuitamente.</p></div>
-        <form id="signupForm" class="signup-form">
-          <label>Nome<input id="signupName" placeholder="Seu nome" autocomplete="name" required></label>
-          <label>E-mail<input id="signupEmail" type="email" placeholder="voce@exemplo.com" autocomplete="email" required></label>
-          <label>Senha<input id="signupPassword" type="password" placeholder="Mínimo de 6 caracteres" autocomplete="new-password" minlength="6" required></label>
-          <button class="secondary auth-secondary" type="submit">Criar minha conta</button>
-        </form>
+      <form id="signupForm" class="signup-form">
+        <div class="grid-2">
+          <label>Nome<input id="signupName" type="text" placeholder="Seu nome" required></label>
+          <label>E-mail<input id="signupEmail" type="email" placeholder="seu@email.com" required></label>
+        </div>
+        <label>Senha<input id="signupPassword" type="password" minlength="6" placeholder="Mínimo 6 caracteres" required></label>
+        <button class="ghost wide" type="submit">Criar minha conta</button>
+      </form>
+      <small class="auth-note">Seus dados ficam separados por usuário no Firestore.</small>
+    </div>
+    <div class="auth-side">
+      <div class="side-badge">VISÃO 360°</div>
+      <h2>Saiba para onde<br>seu dinheiro está indo.</h2>
+      <div class="mini-stat"><span>Fluxo mensal</span><b>Entradas × Saídas</b></div>
+      <div class="mini-stat"><span>Planejamento</span><b>Contas + cartões + metas</b></div>
+      <div class="mini-stat"><span>Projeção</span><b>Veja os próximos meses</b></div>
+    </div>
+  </section>
+
+  <section id="appScreen" class="app-shell hidden">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">R$</span><div><b>RELUZ</b><small>FINANCEIRO</small></div></div>
+      <div class="user-chip"><div id="avatar">R</div><div><b id="userName">Usuário</b><small id="userEmail"></small></div></div>
+      <nav>
+        <button data-view="dashboard" class="nav active">⌂ <span>Dashboard</span></button>
+        <button data-view="transactions" class="nav">↔ <span>Lançamentos</span></button>
+        <button data-view="accounts" class="nav">▣ <span>Contas</span></button>
+        <button data-view="cards" class="nav">▤ <span>Cartões</span></button>
+        <button data-view="recurring" class="nav">↻ <span>Recorrentes</span></button>
+        <button data-view="goals" class="nav">◎ <span>Metas</span></button>
+        <button data-view="categories" class="nav">◈ <span>Categorias</span></button>
+        <button data-view="reports" class="nav">▥ <span>Relatórios</span></button>
+      </nav>
+      <div class="sidebar-bottom"><button id="logoutBtn" class="logout">↪ Sair</button></div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div><span class="eyebrow" id="pageEyebrow">VISÃO GERAL</span><h1 id="pageTitle">Dashboard</h1></div>
+        <div class="top-actions"><button id="quickAdd" class="primary">＋ Novo lançamento</button><button id="refreshBtn" class="icon-btn">↻</button></div>
+      </header>
+
+      <div id="view-dashboard" class="view">
+        <div class="hero-row">
+          <div class="hero-card"><div><span>Saldo consolidado</span><strong id="balance">R$ 0,00</strong><small id="balanceHint">Todas as contas</small></div><div class="hero-icon">R$</div></div>
+          <div class="period-box"><label>Período<select id="dashPeriod"><option value="month">Este mês</option><option value="last">Mês anterior</option><option value="year">Este ano</option><option value="all">Tudo</option></select></label></div>
+        </div>
+        <div class="stat-grid">
+          <div class="stat-card"><span>Entradas</span><b id="income">R$ 0,00</b><small class="positive">Recebimentos no período</small></div>
+          <div class="stat-card"><span>Saídas</span><b id="expense">R$ 0,00</b><small class="negative">Pagamentos no período</small></div>
+          <div class="stat-card"><span>Resultado</span><b id="result">R$ 0,00</b><small id="resultLabel">Fluxo líquido</small></div>
+          <div class="stat-card"><span>A vencer</span><b id="dueSoon">R$ 0,00</b><small>Próximos 7 dias</small></div>
+        </div>
+        <div class="content-grid">
+          <section class="panel chart-panel"><div class="panel-head"><div><span class="eyebrow">MOVIMENTO</span><h2>Fluxo financeiro</h2></div></div><div class="chart-wrap"><canvas id="cashflowChart"></canvas></div></section>
+          <section class="panel"><div class="panel-head"><div><span class="eyebrow">DISTRIBUIÇÃO</span><h2>Gastos por categoria</h2></div></div><div id="categoryBars" class="category-bars"></div></section>
+        </div>
+        <div class="content-grid lower">
+          <section class="panel"><div class="panel-head"><h2>Próximos vencimentos</h2><button class="text-btn" data-view-jump="transactions">Ver todos</button></div><div id="upcomingList" class="list"></div></section>
+          <section class="panel"><div class="panel-head"><h2>Últimos lançamentos</h2><button class="text-btn" data-view-jump="transactions">Ver todos</button></div><div id="recentList" class="list"></div></section>
+        </div>
       </div>
-      <p id="authMsg" class="auth-msg"></p>
-      <small class="auth-security">🔒 Seus dados são protegidos pelo Firebase.</small>
-    </section>
-  </div>
-</div>
-<div id="app" class="hidden"><header><b>💰 Meu Financeiro</b><span><span id="userName"></span> <button id="logout" class="danger">Sair</button></span></header>
-<div class="layout"><nav>
-<button data-page="dashboard">📊 Dashboard</button><button data-page="lancamentos">📝 Lançamentos</button><button data-page="categorias">🏷️ Categorias</button><button data-page="cartoes">💳 Cartões</button><button data-page="recorrentes">🔄 Recorrentes</button><button data-page="metas">🎯 Metas</button><button data-page="contas">🏦 Contas</button><button data-page="relatorios">📄 Relatórios</button></nav>
-<main>
-<section id="dashboard" class="page"><div class="head"><h2>Dashboard</h2><input id="dashMonth" type="month"></div>
-<div class="kpis"><div><small>Entradas</small><strong id="inTotal">R$ 0</strong></div><div><small>Saídas</small><strong id="outTotal">R$ 0</strong></div><div><small>Resultado</small><strong id="result">R$ 0</strong></div><div><small>Disponível</small><strong id="available">R$ 0</strong></div></div>
-<div class="cols"><div class="card"><h3>Fluxo</h3><canvas id="flow"></canvas></div><div class="card"><h3>Gastos por categoria</h3><canvas id="cats"></canvas></div></div>
-<div class="cols3"><div class="card"><h3>Contas pendentes</h3><div id="due"></div></div><div class="card"><h3>Cartões</h3><div id="cardDash"></div></div><div class="card"><h3>Metas</h3><div id="goalDash"></div></div></div></section>
 
-<section id="lancamentos" class="page hidden"><h2>Lançamentos</h2><div class="card"><form id="txForm" class="grid">
-<label>Tipo<select id="txType"><option value="saida">Saída</option><option value="entrada">Entrada</option></select></label><label>Valor<input id="txAmount" type="number" step=".01" required></label><label>Data<input id="txDate" type="date" required></label><label>Categoria<select id="txCat"></select></label><label>Conta<select id="txAccount"></select></label><label>Cartão<select id="txCard"><option value="">Nenhum</option></select></label><label>Status<select id="txStatus"><option value="pago">Pago/Recebido</option><option value="pendente">Pendente</option></select></label><label>Descrição<input id="txDesc" required></label><label>Parcelas<input id="txInstall" type="number" min="1" value="1"></label><label class="wide">Observação<textarea id="txNotes"></textarea></label><button class="wide">Salvar</button></form><p id="txMsg"></p></div><div class="card table"><table><thead><tr><th>Data</th><th>Tipo</th><th>Descrição</th><th>Categoria</th><th>Valor</th><th>Status</th><th>Parcela</th></tr></thead><tbody id="txBody"></tbody></table></div></section>
+      <div id="view-transactions" class="view hidden">
+        <div class="toolbar"><div class="filters"><input id="txSearch" placeholder="Buscar lançamento..."><select id="txType"><option value="">Todos</option><option value="income">Entradas</option><option value="expense">Saídas</option></select><select id="txStatus"><option value="">Todos os status</option><option value="paid">Pagos/recebidos</option><option value="pending">Pendentes</option></select></div><button class="primary" id="newTx">＋ Lançamento</button></div>
+        <section class="panel table-panel"><div class="panel-head"><h2>Lançamentos</h2><span id="txCount" class="muted"></span></div><div class="table-scroll"><table><thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th>Conta</th><th>Status</th><th>Valor</th><th></th></tr></thead><tbody id="txTable"></tbody></table></div></section>
+      </div>
 
-<section id="categorias" class="page hidden"><h2>Categorias</h2><div class="card"><form id="catForm" class="grid"><label>Nome da categoria<input id="catName" maxlength="60" placeholder="Ex.: Alimentação" required></label><label>Tipo<select id="catType"><option value="saida">Saída</option><option value="entrada">Entrada</option><option value="ambos">Entrada e saída</option></select></label><button class="wide">Cadastrar categoria</button></form><p id="catMsg"></p></div><div class="card table"><table><thead><tr><th>Categoria</th><th>Tipo</th><th>Ação</th></tr></thead><tbody id="catBody"></tbody></table></div></section>
+      <div id="view-accounts" class="view hidden"><div class="toolbar"><div><span class="eyebrow">PATRIMÔNIO</span><h2>Contas e carteiras</h2></div><button class="primary" id="newAccount">＋ Nova conta</button></div><div id="accountsGrid" class="entity-grid"></div></div>
+      <div id="view-cards" class="view hidden"><div class="toolbar"><div><span class="eyebrow">CRÉDITO</span><h2>Meus cartões</h2></div><button class="primary" id="newCard">＋ Novo cartão</button></div><div id="cardsGrid" class="entity-grid"></div></div>
+      <div id="view-recurring" class="view hidden"><div class="toolbar"><div><span class="eyebrow">AUTOMAÇÃO</span><h2>Lançamentos recorrentes</h2></div><button class="primary" id="newRecurring">＋ Nova recorrência</button></div><div id="recurringGrid" class="entity-grid"></div></div>
+      <div id="view-goals" class="view hidden"><div class="toolbar"><div><span class="eyebrow">PLANEJAMENTO</span><h2>Metas financeiras</h2></div><button class="primary" id="newGoal">＋ Nova meta</button></div><div id="goalsGrid" class="entity-grid"></div></div>
+      <div id="view-categories" class="view hidden"><div class="toolbar"><div><span class="eyebrow">ORGANIZAÇÃO</span><h2>Categorias</h2></div><button class="primary" id="newCategory">＋ Nova categoria</button></div><div id="categoriesGrid" class="entity-grid"></div></div>
+      <div id="view-reports" class="view hidden"><div class="toolbar"><div><span class="eyebrow">ANÁLISE</span><h2>Relatórios</h2></div><button class="primary" id="exportCsv">⇩ Exportar CSV</button></div><div class="stat-grid"><div class="stat-card"><span>Receita média mensal</span><b id="avgIncome">R$ 0,00</b></div><div class="stat-card"><span>Despesa média mensal</span><b id="avgExpense">R$ 0,00</b></div><div class="stat-card"><span>Maior categoria</span><b id="topCategory">—</b></div><div class="stat-card"><span>Taxa de poupança</span><b id="savingRate">0%</b></div></div><section class="panel"><div class="panel-head"><h2>Resumo por categoria</h2></div><div class="table-scroll"><table><thead><tr><th>Categoria</th><th>Tipo</th><th>Lançamentos</th><th>Total</th></tr></thead><tbody id="reportTable"></tbody></table></div></section></div>
+    </main>
+  </section>
 
-<section id="cartoes" class="page hidden"><h2>Cartões</h2><div class="card"><form id="cardForm" class="grid"><label>Nome<input id="cardName" required></label><label>Limite<input id="cardLimit" type="number" step=".01" required></label><label>Fechamento<input id="cardClose" type="number" min="1" max="31" required></label><label>Vencimento<input id="cardDue" type="number" min="1" max="31" required></label><button class="wide">Cadastrar</button></form><p id="cardMsg"></p></div><div class="card table"><table><thead><tr><th>Cartão</th><th>Limite</th><th>Usado</th><th>Disponível</th><th>Fechamento</th><th>Vencimento</th></tr></thead><tbody id="cardBody"></tbody></table></div></section>
+  <div id="modal" class="modal hidden"><div class="modal-backdrop"></div><div class="modal-card"><div class="modal-head"><div><span class="eyebrow" id="modalEyebrow">CADASTRO</span><h2 id="modalTitle">Novo</h2></div><button id="modalClose" class="icon-btn">×</button></div><form id="modalForm"><div id="modalFields" class="form-grid"></div><div class="modal-actions"><button type="button" class="ghost" id="modalCancel">Cancelar</button><button type="submit" class="primary">Salvar</button></div></form></div></div>
 
-<section id="recorrentes" class="page hidden"><h2>Contas recorrentes</h2><div class="card"><form id="recForm" class="grid"><label>Descrição<input id="recDesc" required></label><label>Valor<input id="recAmount" type="number" step=".01" required></label><label>Categoria<select id="recCat"></select></label><label>Dia<input id="recDay" type="number" min="1" max="31" required></label><label>Início<input id="recStart" type="date" required></label><label>Fim<input id="recEnd" type="date"></label><button class="wide">Cadastrar</button></form><p id="recMsg"></p></div><div class="card table"><table><thead><tr><th>Descrição</th><th>Valor</th><th>Categoria</th><th>Dia</th><th>Início</th><th>Fim</th></tr></thead><tbody id="recBody"></tbody></table></div></section>
-
-<section id="metas" class="page hidden"><h2>Metas</h2><div class="card"><form id="goalForm" class="grid"><label>Meta<input id="goalName" required></label><label>Objetivo<input id="goalTarget" type="number" step=".01" required></label><label>Atual<input id="goalCurrent" type="number" step=".01" value="0"></label><label>Prazo<input id="goalDate" type="date"></label><button class="wide">Cadastrar</button></form><p id="goalMsg"></p></div><div id="goals"></div></section>
-
-<section id="contas" class="page hidden"><h2>Contas e patrimônio</h2><div class="card"><form id="accountForm" class="grid"><label>Nome<input id="accountName" required></label><label>Tipo<select id="accountType"><option>Conta corrente</option><option>Poupança</option><option>Dinheiro</option><option>Investimento</option><option>Outro</option></select></label><label>Saldo inicial<input id="accountInitial" type="number" step=".01" value="0"></label><button class="wide">Cadastrar</button></form><p id="accountMsg"></p></div><div class="card table"><table><thead><tr><th>Conta</th><th>Tipo</th><th>Inicial</th><th>Movimentação</th><th>Atual</th></tr></thead><tbody id="accountBody"></tbody></table></div></section>
-
-<section id="relatorios" class="page hidden"><h2>Relatórios</h2><div class="card"><div class="actions"><label>Mês<input id="reportMonth" type="month"></label><button id="excel">Exportar Excel</button><button id="pdf" class="secondary">Gerar PDF</button></div><div id="summary"></div></div><div class="card table"><table><thead><tr><th>Data</th><th>Tipo</th><th>Descrição</th><th>Categoria</th><th>Valor</th><th>Status</th></tr></thead><tbody id="reportBody"></tbody></table></div></section>
-</main></div></div><script src="config.js"></script><script type="module" src="app.js"></script></body></html>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

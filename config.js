@@ -1,4 +1,4 @@
-window.FIREBASE_CONFIG = {
+export const firebaseConfig = {
   apiKey: "AIzaSyBWuAqwQjqZCdxlNSJc_nXaLL598EI4UvU",
   authDomain: "reluz-financeiro.firebaseapp.com",
   projectId: "reluz-financeiro",
