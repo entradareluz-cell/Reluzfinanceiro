@@ -59,18 +59,3 @@ Coleções usadas:
 ## Observação
 
 O sistema usa módulos Firebase diretamente pela CDN, sem necessidade de Node/npm para funcionar no GitHub Pages. A documentação oficial do Firebase recomenda a API modular para integrações novas; para produção maior, este projeto pode posteriormente ser migrado para Vite/npm e receber build otimizado.
-
-
-## Funcionalidades avançadas incluídas
-- Dashboard com saldo, entradas, saídas, resultado, contas a pagar/receber, cartões, evolução e comparação mensal.
-- Lançamentos com subcategoria, competência, pagamento/recebimento, forma de pagamento, recorrência, parcelamento e comprovante via Firebase Storage.
-- Cartões com limite, utilização, disponível, fechamento e vencimento.
-- Contas correntes, poupança, dinheiro, PIX e transferências entre contas.
-- Contas a pagar/receber, vencidas e projeções de 30/60/90 dias.
-- Recorrências com geração automática das próximas ocorrências.
-- Metas com progresso.
-- Relatórios, DRE simplificada, comparativo mensal, PDF e Excel.
-- Calendário financeiro e busca global.
-
-## Firebase Storage
-Publique também `storage.rules` em Firebase Storage > Rules. O upload de comprovantes fica limitado a 10 MB por arquivo e cada usuário só acessa seus próprios comprovantes.
