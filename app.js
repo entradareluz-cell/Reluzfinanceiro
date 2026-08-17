@@ -1,21 +1,130 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js";
 import {
- getAuth, onAuthStateChanged, signInWithEmailAndPassword,
- createUserWithEmailAndPassword, updateProfile, signOut
+  getAuth, onAuthStateChanged, signInWithEmailAndPassword,
+  createUserWithEmailAndPassword, updateProfile, signOut
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js";
-import {
- getFirestore, collection, doc, getDoc, getDocs, addDoc, setDoc,
- deleteDoc, query, where, orderBy, limit, serverTimestamp, writeBatch, updateDoc
-} from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-storage.js";
 
+const API_URL = "https://script.google.com/macros/s/AKfycbwNTGqkiHjOVEbFrxfN409gY0DPr8sAwoJ_q0Zc1hStpXgAfoDC4ZtvE5Uamq_7qiyl/exec";
 const cfg=window.FIREBASE_CONFIG||{};
 const firebaseReady=cfg.apiKey&&!String(cfg.apiKey).includes("COLE_AQUI")&&cfg.projectId&&cfg.projectId!=="SEU-PROJETO";
-let firebaseApp,auth,db,storage;
+let firebaseApp,auth,storage;
 let editingTxId = null;
 let machineRates = [];
-if(firebaseReady){firebaseApp=initializeApp(cfg);auth=getAuth(firebaseApp);db=getFirestore(firebaseApp);storage=getStorage(firebaseApp);}
+if(firebaseReady){firebaseApp=initializeApp(cfg);auth=getAuth(firebaseApp);storage=getStorage(firebaseApp);}
 
+const TABLES={
+  transactions:"LANCAMENTOS",categories:"CATEGORIAS",accounts:"CONTAS",cards:"CARTOES",
+  recurring:"RECORRENTES",goals:"METAS",machine_rates:"TAXAS",users:"USUARIOS",
+  subcategories:"SUBCATEGORIAS",receivings:"RECEBIMENTOS",installments:"PARCELAS",
+  clients:"CLIENTES",suppliers:"FORNECEDORES",cost_centers:"CENTROS_CUSTO",
+  projects:"PROJETOS",orders:"PEDIDOS",audit:"AUDITORIA"
+};
+function sheetName(table){return TABLES[table]||String(table||"").toUpperCase();}
+async function api(action,payload={}){
+  const body={action,...payload};
+  const res=await fetch(API_URL,{
+    method:"POST",
+    headers:{"Content-Type":"text/plain;charset=utf-8"},
+    body:JSON.stringify(body)
+  });
+  const text=await res.text();
+  let data;
+  try{data=JSON.parse(text)}catch{throw new Error(text||"Resposta inválida do Apps Script.");}
+  if(data?.success===false) throw new Error(data.error||"Erro no Apps Script.");
+  return data;
+}
+function apiError(error){console.error("Google Sheets/App Script",error);return {data:null,error};}
+function collectionRef(name){return {sheet:sheetName(name)}}
+function doc(_db,name,id){return {sheet:sheetName(name),id:String(id)}}
+async function getDoc(ref){
+  try{
+    const r=await api("get",{sheet:ref.sheet,id:ref.id});
+    return {exists:()=>!!r.data,data:()=>r.data||null};
+  }catch(error){return {exists:()=>false,data:()=>null,error};}
+}
+async function setDoc(ref,data){
+  try{const r=await api("upsert",{sheet:ref.sheet,id:ref.id,record:data});return {id:r.data?.id||ref.id};}
+  catch(error){throw error;}
+}
+async function addDoc(ref,data){
+  const r=await api("create",{sheet:ref.sheet,record:data});
+  return {id:r.data?.id,data:r.data};
+}
+async function updateDoc(ref,data){await api("update",{sheet:ref.sheet,id:ref.id,record:data});}
+async function deleteDoc(ref){await api("delete",{sheet:ref.sheet,id:ref.id});}
+function serverTimestamp(){return new Date().toISOString();}
+async function getDocs(ref){const r=await api("list",{sheet:ref.sheet});return {docs:(r.data||[]).map(x=>({id:x.id,data:()=>x}))};}
+
+function builder(table){
+ let filters=[],sort=null,maxRows=null,mode="select",insertData=null;
+ const apiObj={
+  select(_fields="*"){mode="select";return apiObj},
+  eq(field,value){filters.push([field,value]);return apiObj},
+  order(field,opts={}){sort=[field,!!opts.ascending];return apiObj},
+  limit(n){maxRows=n;return apiObj},
+  insert(data){mode="insert";insertData=data;return apiObj},
+  delete(){mode="delete";return apiObj},
+  then(resolve,reject){execute().then(resolve,reject)}
+ };
+ async function execute(){
+  try{
+   if(mode==="insert"){
+    const rows=Array.isArray(insertData)?insertData:[insertData];
+    const created=[];
+    for(const row of rows){
+      const r=await api("create",{sheet:sheetName(table),record:row});
+      created.push(r.data);
+    }
+    return {data:created,error:null};
+   }
+   let r=await api("list",{sheet:sheetName(table)});
+   let data=Array.isArray(r.data)?r.data:[];
+   for(const [field,value] of filters)data=data.filter(x=>String(x?.[field]??"")===String(value??""));
+   if(sort)data.sort((a,b)=>{const av=a?.[sort[0]],bv=b?.[sort[0]];if(av==bv)return 0;return (av>bv?1:-1)*(sort[1]?1:-1)});
+   if(maxRows)data=data.slice(0,maxRows);
+   data.forEach(x=>joinRelations(table,x));
+   if(mode==="delete"){
+     for(const row of data) if(row.id) await api("delete",{sheet:sheetName(table),id:row.id});
+     return {data:null,error:null};
+   }
+   return {data,error:null};
+  }catch(error){return apiError(error)}
+ }
+ return apiObj;
+}
+const sb={
+ from:builder,
+ auth:{
+  getSession:async()=>({data:{session:auth?.currentUser?{user:auth.currentUser}:null},error:null}),
+  signInWithPassword:async({email,password})=>{try{const r=await signInWithEmailAndPassword(auth,email,password);return {data:{user:r.user},error:null}}catch(error){return {data:null,error}}},
+  signUp:async({email,password,options})=>{
+   try{
+    const r=await createUserWithEmailAndPassword(auth,email,password);
+    const name=options?.data?.name||email.split("@")[0];
+    await updateProfile(r.user,{displayName:name});
+    await api("upsert",{sheet:sheetName("users"),id:r.user.uid,record:{id:r.user.uid,user_id:r.user.uid,name,email,perfil:"usuario",ativo:true,created_at:serverTimestamp()}});
+    for(const [n,t] of defaults){
+      await api("create",{sheet:sheetName("categories"),record:{user_id:r.user.uid,name:n,type:t,active:true,created_at:serverTimestamp()}});
+    }
+    return {data:{user:r.user,session:{user:r.user}},error:null};
+   }catch(error){return {data:null,error}}
+  },
+  signOut:()=>signOut(auth),
+  onAuthStateChange:(callback)=>onAuthStateChanged(auth,(u)=>callback(u?"SIGNED_IN":"SIGNED_OUT",u?{user:u}:null))
+ }
+};
+
+let categoriesCache=[],accountsCache=[],cardsCache=[];
+function joinRelations(table,row){
+ if(table==="transactions"){
+  row.categories=categoriesCache.find(x=>x.id===row.category_id)||null;
+  row.accounts=accountsCache.find(x=>x.id===row.account_id)||null;
+  row.cards=cardsCache.find(x=>x.id===row.card_id)||null;
+ }
+ if(table==="recurring") row.categories=categoriesCache.find(x=>x.id===row.category_id)||null;
+ return row;
+}
 const defaults=[['Salário','entrada'],['Extra','entrada'],['Reembolso','entrada'],['Outros recebimentos','entrada'],['Casa','saida'],['Mercado','saida'],['Alimentação','saida'],['Carro','saida'],['Combustível','saida'],['Contas','saida'],['Celular/Internet','saida'],['Cartão','saida'],['Lazer','saida'],['Compras','saida'],['Pets','saida'],['Família','saida'],['Investimentos','saida'],['Outros','saida']];
 
 function firebaseErrorMessage(err){
@@ -29,74 +138,6 @@ function firebaseErrorMessage(err){
  if(m.includes("network-request-failed")||m.includes("Failed to fetch")) return "Não foi possível conectar ao Firebase.";
  return m;
 }
-function joinRelations(table,row){
- if(table==="transactions"){
-  row.categories=categoriesCache.find(x=>x.id===row.category_id)||null;
-  row.accounts=accountsCache.find(x=>x.id===row.account_id)||null;
-  row.cards=cardsCache.find(x=>x.id===row.card_id)||null;
- }
- if(table==="recurring") row.categories=categoriesCache.find(x=>x.id===row.category_id)||null;
- return row;
-}
-let categoriesCache=[],accountsCache=[],cardsCache=[];
-
-function collectionRef(name){return collection(db,name)}
-function builder(table){
- let filters=[],sort=null,maxRows=null,mode="select",insertData=null;
- const api={
-  select(_fields="*"){mode="select";return api},
-  eq(field,value){filters.push([field,value]);return api},
-  order(field,opts={}){sort=[field,!!opts.ascending];return api},
-  limit(n){maxRows=n;return api},
-  insert(data){mode="insert";insertData=data;return api},
-  delete(){mode="delete";return api},
-  then(resolve,reject){execute().then(resolve,reject)}
- };
- async function execute(){
-  try{
-   if(mode==="insert"){
-    const rows=Array.isArray(insertData)?insertData:[insertData],batch=writeBatch(db);
-    for(const row of rows) batch.set(doc(collectionRef(table)),{...row,created_at:row.created_at||serverTimestamp()});
-    await batch.commit(); return {data:rows,error:null};
-   }
-   if(mode==="delete"){
-    const snap=await getDocs(query(collectionRef(table),...filters.map(([f,v])=>where(f,"==",v))));
-    const batch=writeBatch(db);snap.docs.forEach(d=>batch.delete(d.ref));await batch.commit();return {data:null,error:null};
-   }
-   let clauses=filters.map(([f,v])=>where(f,"==",v));
-   if(sort) clauses.push(orderBy(sort[0],sort[1]?"asc":"desc"));
-   if(maxRows) clauses.push(limit(maxRows));
-   const snap=await getDocs(query(collectionRef(table),...clauses));
-   let data=snap.docs.map(d=>({id:d.id,...d.data()}));
-   if(sort && !clauses.length) data.sort(()=>0);
-   data.forEach(r=>joinRelations(table,r));
-   return {data,error:null};
-  }catch(error){console.error("Firestore",table,error);return {data:null,error}}
- }
- return api;
-}
-const sb={
- from:builder,
- auth:{
-  getSession:async()=>({data:{session:auth?.currentUser?{user:auth.currentUser}:null},error:null}),
-  signInWithPassword:async({email,password})=>{try{const r=await signInWithEmailAndPassword(auth,email,password);return {data:{user:r.user},error:null}}catch(error){return {data:null,error}}},
-  signUp:async({email,password,options})=>{
-   try{
-    const r=await createUserWithEmailAndPassword(auth,email,password);
-    const name=options?.data?.name||email.split("@")[0];
-    await updateProfile(r.user,{displayName:name});
-    await setDoc(doc(db,"users",r.user.uid),{name,email,created_at:serverTimestamp()});
-    const batch=writeBatch(db);
-    defaults.forEach(([n,t])=>batch.set(doc(collectionRef("categories")),{user_id:r.user.uid,name:n,type:t,created_at:serverTimestamp()}));
-    await batch.commit();
-    return {data:{user:r.user,session:{user:r.user}},error:null};
-   }catch(error){return {data:null,error}}
-  },
-  signOut:()=>signOut(auth),
-  onAuthStateChange:(callback)=>onAuthStateChanged(auth,(u)=>callback(u?"SIGNED_IN":"SIGNED_OUT",u?{user:u}:null))
- }
-};
-
 let user,categories=[],accounts=[],cards=[],recurring=[],goalsList=[],txs=[],flowChart,catChart;
 const $=x=>document.getElementById(x),today=new Date().toISOString().slice(0,10),thisMonth=today.slice(0,7);
 const money=n=>Number(n||0).toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
@@ -354,7 +395,7 @@ async function editTx(id){
   const t=txs.find(x=>x.id===id);if(!t)return;
   editingTxId=id;page('lancamentos');
   $("txType").value=t.type;fillCategorySelects();$("txCat").value=t.category_id||"";updateMetalFields();
-  $("txAmount").value=t.original_amount??t.amount??0;$("txDate").value=t.competence_date||t.transaction_date||today;$("txPaidDate").value=t.paid_date||"";$("txSubcategory").value=t.subcategory||"";$("txAccount").value=t.account_id||"";$("txCard").value=t.card_id||"";$("txMethod").value=t.payment_method||"pix";$("txStatus").value=t.status||"pago";$("txName").value=t.name||"";$("txDesc").value=t.description||"";$("txInstall").value=t.installment_total||1;$("txPaidAmount").value=t.payment_received_amount||t.amount||"";$("txNotes").value=t.notes||"";$("txMetalValue").value=t.metal_value||"";$("txInitialKg").value=t.initial_kg||"";$("txFinalKg").value=t.final_kg||"";
+  $("txAmount").value=t.original_amount??t.amount??0;$("txDate").value=t.competence_date||t.transaction_date||today;$("txPaidDate").value=t.paid_date||"";$("txSubcategory").value=t.subcategory||"";$("txAccount").value=t.account_id||"";$("txCard").value=t.card_id||"";$("txMethod").value=t.payment_method||"pix";$("txStatus").value=t.status||"pago";$("txName").value=t.name||"";$("txDesc").value=t.description||"";$("txInstall").value=t.installment_total||1;$("txPaidAmount").value=t.payment_received_amount||t.amount||"";$("txNotes").value=t.notes||"";$("txDreClass").value=t.dre_class||"receita";$("txMetalValue").value=t.metal_value||"";$("txInitialKg").value=t.initial_kg||"";$("txFinalKg").value=t.final_kg||"";
   const wrap=$("paymentParts");wrap.innerHTML="";const parts=Array.isArray(t.payment_parts)&&t.payment_parts.length?t.payment_parts:[{method:t.payment_method||'pix',amount:t.amount,card_id:t.card_id,installments:t.installment_total||1,fee_percent:t.fee_percent||0,rate_id:t.rate_id||null}];parts.forEach(addPaymentPart);updatePaymentParts();$("txForm button[type=submit]").textContent="Salvar alterações";
 }
 async function saveTx(e){
@@ -370,7 +411,7 @@ async function saveTx(e){
  const g=editingTxId||crypto.randomUUID();let attachmentUrl=txs.find(t=>t.id===editingTxId)?.attachment_url||null;const file=$('txAttachmentFile')?.files?.[0];
  if(file){try{const safe=file.name.replace(/[^a-zA-Z0-9._-]/g,"_");const rr=storageRef(storage,`users/${user.uid}/comprovantes/${g}-${safe}`);await uploadBytes(rr,file);attachmentUrl=await getDownloadURL(rr)}catch(err){return msg("txMsg","Não foi possível enviar o comprovante: "+friendlyError(err))}}
  const categoryName=categories.find(c=>c.id===$('txCat').value)?.name||"";
- const base={user_id:user.uid,type:$('txType').value,amount:total,original_amount:total,transaction_date:$('txDate').value,competence_date:$('txDate').value,paid_date:$('txPaidDate').value||null,category_id:$('txCat').value,subcategory:$('txSubcategory').value||null,account_id:$('txAccount').value||null,card_id:$('txCard').value||null,payment_method:method,status,name:$('txName').value.trim(),description:$('txDesc').value.trim()||null,notes:$('txNotes').value||null,attachment_url:attachmentUrl,recurrence:$('txRecurring').value,group_id:g,payment_parts:parts,payment_received_amount:target,payment_fee_total:parts.reduce((s,p)=>s+p.amount*(p.fee_percent||0)/100,0),metal_value:+($("txMetalValue")?.value||0)||0,initial_kg:+($("txInitialKg")?.value||0)||0,final_kg:+($("txFinalKg")?.value||0)||0,category_name:categoryName};
+ const base={user_id:user.uid,type:$('txType').value,amount:total,original_amount:total,transaction_date:$('txDate').value,competence_date:$('txDate').value,paid_date:$('txPaidDate').value||null,category_id:$('txCat').value,subcategory:$('txSubcategory').value||null,account_id:$('txAccount').value||null,card_id:$('txCard').value||null,payment_method:method,status,name:$('txName').value.trim(),description:$('txDesc').value.trim()||null,notes:$('txNotes').value||null,dre_class:$('txDreClass')?.value||($('txType').value==='entrada'?'receita':'despesa_operacional'),attachment_url:attachmentUrl,recurrence:$('txRecurring').value,group_id:g,payment_parts:parts,payment_received_amount:target,payment_fee_total:parts.reduce((s,p)=>s+p.amount*(p.fee_percent||0)/100,0),metal_value:+($("txMetalValue")?.value||0)||0,initial_kg:+($("txInitialKg")?.value||0)||0,final_kg:+($("txFinalKg")?.value||0)||0,category_name:categoryName};
  if(editingTxId){
    const ref=doc(db,"transactions",editingTxId);const current=txs.find(t=>t.id===editingTxId)||{};
    const fee=parts[0]?.fee_percent||0, net=total-total*fee/100;
@@ -404,12 +445,31 @@ async function saveGoal(e){e.preventDefault();let r=await sb.from("goals").inser
 async function saveTransfer(e){e.preventDefault();const from=$("transferFrom").value,to=$("transferTo").value,amount=+$("transferAmount").value;if(!from||!to||from===to||!amount)return msg("transferMsg","Escolha contas diferentes e informe um valor.");const group=crypto.randomUUID(),date=$("transferDate").value||today,desc=$("transferDesc").value||"Transferência entre contas";const rows=[{user_id:user.uid,type:"saida",amount,transaction_date:date,competence_date:date,paid_date:date,account_id:from,status:"pago",description:desc,notes:"Transferência - origem",payment_method:"transfer",transfer_group_id:group},{user_id:user.uid,type:"entrada",amount,transaction_date:date,competence_date:date,paid_date:date,account_id:to,status:"pago",description:desc,notes:"Transferência - destino",payment_method:"transfer",transfer_group_id:group}];const r=await sb.from("transactions").insert(rows);msg("transferMsg",r.error?.message||"Transferência realizada.");if(!r.error){$("transferForm").reset();$("transferDate").value=today;await load()}}
 async function saveAccount(e){e.preventDefault();let r=await sb.from("accounts").insert({user_id:user.uid,name:$("accountName").value,type:$("accountType").value,initial_balance:+$("accountInitial").value||0});msg("accountMsg",r.error?.message||"Conta cadastrada.");if(!r.error){$("accountForm").reset();await load()}}
 function paymentSummary(t){const p=Array.isArray(t.payment_parts)?t.payment_parts:[];if(!p.length)return t.payment_method||"-";return p.map(x=>{let label=x.method==='credit'?`Cartão${x.installments>1?` ${x.installments}x`:''}`:({pix:'PIX',debit:'Débito',cash:'Dinheiro',transfer:'Transferência',boleto:'Boleto',other:'Outro'})[x.method]||x.method;return `${label}: ${money(x.amount)}${x.method==='credit'&&x.fee_percent?` · taxa ${x.fee_percent}%`:''}`}).join(' + ')}
-function render(){$("txBody").innerHTML=txs.slice(0,200).map(t=>`<tr><td>${t.transaction_date}</td><td>${t.type}</td><td>${esc(t.name||t.description||"Sem nome")}</td><td>${esc(t.categories?.name||"-")}</td><td>${money(t.amount)}${t.original_amount&&Math.abs(Number(t.original_amount)-Number(t.amount))>0.001?`<small class="cell-sub">Bruto ${money(t.original_amount)}</small>`:""}</td><td>${t.status}<small class="cell-sub">${esc(paymentSummary(t))}</small></td><td>${t.installment_total>1?t.installment_number+"/"+t.installment_total:"-"}</td><td><button type="button" class="secondary small-btn" onclick="editTx('${t.id}')">Editar</button></td></tr>`).join("");$("cardBody").innerHTML=cards.map(c=>{let u=txs.filter(t=>t.card_id===c.id&&t.type==="saida"&&t.transaction_date.startsWith(thisMonth)).reduce((a,t)=>a+ +t.amount,0);return`<tr><td>${esc(c.name)}</td><td>${money(c.limit_amount)}</td><td>${money(u)}</td><td>${money(Math.max(0,c.limit_amount-u))}</td><td>${c.closing_day}</td><td>${c.due_day}</td></tr>`}).join("");$("recBody").innerHTML=recurring.map(r=>`<tr><td>${esc(r.description)}</td><td>${money(r.amount)}</td><td>${esc(r.categories?.name||"-")}</td><td>${r.due_day}</td><td>${r.start_date}</td><td>${r.end_date||"-"}</td></tr>`).join("");$("goals").innerHTML=goalsData();$("accountBody").innerHTML=accounts.map(a=>{let m=txs.filter(t=>t.account_id===a.id).reduce((s,t)=>s+(t.type==="entrada"?1:-1)*+t.amount,0);return`<tr><td>${esc(a.name)}</td><td>${esc(a.type)}</td><td>${money(a.initial_balance)}</td><td>${money(m)}</td><td>${money(+a.initial_balance+m)}</td></tr>`}).join("");dashboard();report()}
-function goalsData(){return goalsList.map(g=>{let p=Math.min(100,+g.current_amount/+g.target_amount*100);return`<div class="goal"><h3>${esc(g.name)}</h3><b>${money(g.current_amount)} / ${money(g.target_amount)}</b><div class="progress"><div style="width:${p}%"></div></div>${p.toFixed(1)}%${g.deadline?" · prazo "+g.deadline:""}</div>`}).join("")}
+function render(){
+  $("txBody").innerHTML=txs.slice(0,200).map(t=>`<tr><td>${t.transaction_date}</td><td>${t.type}</td><td>${esc(t.name||t.description||"Sem nome")}</td><td>${esc(t.categories?.name||"-")}</td><td>${money(t.amount)}${t.original_amount&&Math.abs(Number(t.original_amount)-Number(t.amount))>0.001?`<small class="cell-sub">Bruto ${money(t.original_amount)}</small>`:""}</td><td>${t.metal_value?money(t.metal_value):"-"}</td><td>${t.initial_kg?Number(t.initial_kg).toFixed(3):"-"}</td><td>${t.final_kg?Number(t.final_kg).toFixed(3):"-"}</td><td><small>${esc(paymentSummary(t))}</small></td><td>${t.status}</td><td>${t.installment_total>1?t.installment_number+"/"+t.installment_total:"-"}</td><td><button type="button" class="secondary small-btn" onclick="editTx('${t.id}')">Editar</button></td></tr>`).join("");
+  $("cardBody").innerHTML=cards.map(c=>{let u=txs.filter(t=>t.card_id===c.id&&t.type==="saida"&&t.transaction_date.startsWith(thisMonth)).reduce((a,t)=>a+ +t.amount,0);return`<tr><td>${esc(c.name)}</td><td>${money(c.limit_amount)}</td><td>${money(u)}</td><td>${money(Math.max(0,c.limit_amount-u))}</td><td>${c.closing_day}</td><td>${c.due_day}</td></tr>`}).join("");
+  $("recBody").innerHTML=recurring.map(r=>`<tr><td>${esc(r.description)}</td><td>${money(r.amount)}</td><td>${esc(r.categories?.name||"-")}</td><td>${r.due_day}</td><td>${r.start_date}</td><td>${r.end_date||"-"}</td></tr>`).join("");
+  $("goals").innerHTML=goalsData();$("accountBody").innerHTML=accounts.map(a=>{let m=txs.filter(t=>t.account_id===a.id).reduce((s,t)=>s+(t.type==="entrada"?1:-1)*+t.amount,0);return`<tr><td>${esc(a.name)}</td><td>${esc(a.type)}</td><td>${money(a.initial_balance)}</td><td>${money(m)}</td><td>${money(+a.initial_balance+m)}</td></tr>`}).join("");dashboard();report();
+}
 function dashboard(){let m=$("dashMonth").value||thisMonth,r=txs.filter(t=>t.transaction_date.startsWith(m)),ins=r.filter(t=>t.type==="entrada").reduce((s,t)=>s+ +t.amount,0),out=r.filter(t=>t.type==="saida").reduce((s,t)=>s+ +t.amount,0),pending=txs.filter(t=>t.type==="saida"&&t.status==="pendente"&&t.transaction_date>=today).reduce((s,t)=>s+ +t.amount,0);$("inTotal").textContent=money(ins);$("outTotal").textContent=money(out);$("result").textContent=money(ins-out);$("available").textContent=money(ins-out-pending);let daily={};r.forEach(t=>daily[t.transaction_date]=(daily[t.transaction_date]||0)+(t.type==="entrada"?+t.amount:-+t.amount));let cc={};r.filter(t=>t.type==="saida").forEach(t=>cc[t.categories?.name||"Outros"]=(cc[t.categories?.name||"Outros"]||0)+ +t.amount);flowChart?.destroy();catChart?.destroy();flowChart=new Chart($("flow"),{type:"line",data:{labels:Object.keys(daily),datasets:[{label:"Resultado",data:Object.values(daily)}]}});catChart=new Chart($("cats"),{type:"doughnut",data:{labels:Object.keys(cc),datasets:[{data:Object.values(cc)}]}});$("due").innerHTML=txs.filter(t=>t.type==="saida"&&t.status==="pendente").slice(0,5).map(t=>`<p>${t.transaction_date} · ${esc(t.description)}<br><b>${money(t.amount)}</b></p>`).join("")||"Nenhuma.";$("cardDash").innerHTML=cards.map(c=>`<p>${esc(c.name)} · ${money(txs.filter(t=>t.card_id===c.id&&t.type==="saida"&&t.transaction_date.startsWith(m)).reduce((s,t)=>s+ +t.amount,0))}</p>`).join("")||"Nenhum.";$("goalDash").innerHTML=goalsList.slice(0,5).map(g=>`<p>${esc(g.name)} · ${(g.current_amount/g.target_amount*100).toFixed(0)}%</p>`).join("")||"Nenhuma."}
-function report(){let m=$("reportMonth").value||thisMonth,r=txs.filter(t=>t.transaction_date.startsWith(m)),i=r.filter(t=>t.type==="entrada").reduce((s,t)=>s+ +t.amount,0),o=r.filter(t=>t.type==="saida").reduce((s,t)=>s+ +t.amount,0);$("summary").innerHTML=`<p>Entradas <b>${money(i)}</b> · Saídas <b>${money(o)}</b> · Resultado <b>${money(i-o)}</b></p>`;$("reportBody").innerHTML=r.map(t=>`<tr><td>${t.transaction_date}</td><td>${t.type}</td><td>${esc(t.description)}</td><td>${esc(t.categories?.name||"-")}</td><td>${money(t.amount)}</td><td>${t.status}</td></tr>`).join("")}
-function excel(){let m=$("reportMonth").value||thisMonth,r=txs.filter(t=>t.transaction_date.startsWith(m)).map(t=>({Data:t.transaction_date,Tipo:t.type,Descrição:t.description,Categoria:t.categories?.name||"",Conta:t.accounts?.name||"",Cartão:t.cards?.name||"",Valor:+t.amount,Status:t.status,Parcela:t.installment_total>1?`${t.installment_number}/${t.installment_total}`:""}));let ws=XLSX.utils.json_to_sheet(r),wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,"Financeiro");XLSX.writeFile(wb,`financeiro-${m}.xlsx`)}
-function pdf(){let m=$("reportMonth").value||thisMonth,r=txs.filter(t=>t.transaction_date.startsWith(m)),i=r.filter(t=>t.type==="entrada").reduce((s,t)=>s+ +t.amount,0),o=r.filter(t=>t.type==="saida").reduce((s,t)=>s+ +t.amount,0),D=window.jspdf.jsPDF,d=new D();d.text("Relatório Financeiro Pessoal",14,18);d.setFontSize(10);d.text(`Mês: ${m}`,14,27);d.text(`Entradas: ${money(i)}  Saídas: ${money(o)}  Resultado: ${money(i-o)}`,14,36);let y=47;r.forEach(t=>{if(y>285){d.addPage();y=15}d.text(`${t.transaction_date} | ${t.type} | ${String(t.description).slice(0,25)} | ${money(t.amount)}`,14,y);y+=6});d.save(`financeiro-${m}.pdf`)}
+function report(){
+  const m=$("reportMonth").value||thisMonth,r=txs.filter(t=>String(t.transaction_date||"").startsWith(m));
+  const i=r.filter(t=>t.type==="entrada").reduce((s,t)=>s+ +(t.original_amount??t.amount),0),o=r.filter(t=>t.type==="saida").reduce((s,t)=>s+ +t.amount,0);
+  $("summary").innerHTML=`<p>Entradas <b>${money(i)}</b> · Saídas <b>${money(o)}</b> · Resultado <b>${money(i-o)}</b></p>`;
+  $("reportBody").innerHTML=r.map(t=>`<tr><td>${t.transaction_date}</td><td>${t.type}</td><td>${esc(t.name||t.description||"Sem nome")}</td><td>${esc(t.categories?.name||"-")}</td><td>${money(t.amount)}</td><td>${t.metal_value?`${money(t.metal_value)} · ${Number(t.initial_kg||0).toFixed(3)}kg → ${Number(t.final_kg||0).toFixed(3)}kg`:'-'}</td><td>${t.status}</td></tr>`).join("");
+}
+function excel(){
+ const m=$("reportMonth").value||thisMonth,r=txs.filter(t=>String(t.transaction_date||"").startsWith(m));
+ const rows=r.map(t=>({Data:t.transaction_date,Tipo:t.type,Nome:t.name||t.description||"",Descrição:t.description||"",Categoria:t.categories?.name||"",Subcategoria:t.subcategory||"",Conta:t.accounts?.name||"",Cartão:t.cards?.name||"",Valor_Bruto:+(t.original_amount??t.amount),Valor_Liquido:+t.amount,Valor_Metal:+(t.metal_value||0),KG_Inicial:+(t.initial_kg||0),KG_Final:+(t.final_kg||0),Forma_de_Recebimento:paymentSummary(t),Taxa_Total:+(t.payment_fee_total||0),Classificação_DRE:t.dre_class||"",Status:t.status,Parcela:t.installment_total>1?`${t.installment_number}/${t.installment_total}`:""}));
+ const ws=XLSX.utils.json_to_sheet(rows),wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,"Financeiro");XLSX.writeFile(wb,`financeiro-${m}.xlsx`)
+}
+function pdf(){
+ const m=$("reportMonth").value||thisMonth,r=txs.filter(t=>String(t.transaction_date||"").startsWith(m)),i=r.filter(t=>t.type==="entrada").reduce((s,t)=>s+ +(t.original_amount??t.amount),0),o=r.filter(t=>t.type==="saida").reduce((s,t)=>s+ +t.amount,0);
+ const D=window.jspdf.jsPDF,d=new D();d.text("Relatório Financeiro Empresarial",14,18);d.setFontSize(10);d.text(`Mês: ${m}`,14,27);d.text(`Entradas: ${money(i)}  Saídas: ${money(o)}  Resultado: ${money(i-o)}`,14,36);
+ const custos=r.filter(t=>t.type==="saida"&&t.dre_class==="custo").reduce((s,t)=>s+ +t.amount,0),op=r.filter(t=>t.type==="saida"&&(t.dre_class==="despesa_operacional"||!t.dre_class)).reduce((s,t)=>s+ +t.amount,0),fin=r.filter(t=>t.type==="saida"&&t.dre_class==="despesa_financeira").reduce((s,t)=>s+ +t.amount,0),ded=r.filter(t=>t.dre_class==="deducao_receita").reduce((s,t)=>s+ +t.amount,0);
+ d.text("DRE",14,46);d.text(`Receita bruta: ${money(i)}`,14,54);d.text(`(-) Deduções: ${money(ded)}`,14,61);d.text(`Receita líquida: ${money(i-ded)}`,14,68);d.text(`(-) Custos: ${money(custos)}`,14,75);d.text(`(-) Despesas operacionais: ${money(op)}`,14,82);d.text(`Resultado operacional: ${money(i-ded-custos-op)}`,14,89);d.text(`(-) Despesas financeiras: ${money(fin)}`,14,96);d.text(`Resultado líquido: ${money(i-ded-custos-op-fin)}`,14,103);
+ let y=114;d.setFontSize(8);r.forEach(t=>{if(y>285){d.addPage();y=15}const metal=t.metal_value?` | Metal ${money(t.metal_value)} | KG ${Number(t.initial_kg||0).toFixed(3)}→${Number(t.final_kg||0).toFixed(3)}`:"";d.text(`${t.transaction_date} | ${t.type} | ${String(t.name||t.description||"Sem nome").slice(0,28)} | ${money(t.amount)}${metal}`,14,y);y+=6});d.save(`financeiro-${m}.pdf`)
+}
 function page(p){document.querySelectorAll(".page").forEach(x=>x.classList.add("hidden"));$(p).classList.remove("hidden");document.querySelectorAll("nav button").forEach(b=>b.classList.toggle("active",b.dataset.page===p));window.scrollTo({top:0,behavior:"smooth"})}
 
 /* Dashboard financeiro premium */
@@ -497,8 +557,20 @@ function advCalendar(){
 function advGlobalSearch(q){
  const box=$("searchResults");if(!box)return;if(!q||q.length<2){box.classList.add("hidden");return}q=q.toLowerCase();const results=[];txs.forEach(t=>{const hay=`${t.name||""} ${t.description||""} ${t.notes||""} ${t.subcategory||""} ${advCategory(t)} ${advAccount(t)} ${advCard(t)}`.toLowerCase();if(hay.includes(q))results.push({type:"Lançamento",title:t.name||t.description||"Sem nome",meta:`${t.transaction_date} · ${money(t.amount)} · ${advCategory(t)}`})});categories.forEach(c=>{if(c.name.toLowerCase().includes(q))results.push({type:"Categoria",title:c.name,meta:c.type})});accounts.forEach(a=>{if(a.name.toLowerCase().includes(q))results.push({type:"Conta",title:a.name,meta:money(a.initial_balance)})});cards.forEach(c=>{if(c.name.toLowerCase().includes(q))results.push({type:"Cartão",title:c.name,meta:`Limite ${money(c.limit_amount)}`})});box.innerHTML=results.slice(0,12).map(r=>`<div class='search-item'><b>${esc(r.title)}</b><small>${esc(r.type)} · ${esc(r.meta)}</small></div>`).join("")||"<div class='search-item'>Nenhum resultado.</div>";box.classList.remove("hidden");}
 function advReports(){
- const dre=$("dreReport"), annual=$("annualReport");if(!dre||!annual)return;const m=advMonthTotals($('reportMonth')?.value||thisMonth);dre.innerHTML=`<div class='dre-line'><span>Receita bruta</span><b>${money(m.income)}</b></div><div class='dre-line'><span>Custos/Despesas</span><b>${money(m.expense)}</b></div><div class='dre-line total'><span>Resultado líquido</span><b>${money(m.income-m.expense)}</b></div>`;
- const months=[];for(let i=11;i>=0;i--){const d=new Date();d.setMonth(d.getMonth()-i);const key=advISO(d).slice(0,7),v=advMonthTotals(key);months.push({key,...v})}annual.innerHTML=months.map(x=>`<div class='annual-row'><span>${x.key}</span><b>${money(x.income-x.expense)}</b><small>${money(x.income)} / ${money(x.expense)}</small></div>`).join("");}
+ const dre=$("dreReport"), annual=$("annualReport"); if(!dre||!annual)return;
+ const month=$('reportMonth')?.value||thisMonth;
+ const rows=txs.filter(t=>String(t.transaction_date||'').startsWith(month));
+ const income=rows.filter(t=>t.type==='entrada').reduce((s,t)=>s+advNum(t.original_amount??t.amount),0);
+ const custos=rows.filter(t=>t.type==='saida'&&t.dre_class==='custo').reduce((s,t)=>s+advNum(t.amount),0);
+ const deducoes=rows.filter(t=>t.dre_class==='deducao_receita').reduce((s,t)=>s+advNum(t.amount),0);
+ const op=rows.filter(t=>t.type==='saida'&&(t.dre_class==='despesa_operacional'||!t.dre_class)).reduce((s,t)=>s+advNum(t.amount),0);
+ const fin=rows.filter(t=>t.type==='saida'&&t.dre_class==='despesa_financeira').reduce((s,t)=>s+advNum(t.amount),0);
+ const invest=rows.filter(t=>t.type==='saida'&&t.dre_class==='investimento').reduce((s,t)=>s+advNum(t.amount),0);
+ const receitaLiquida=income-deducoes; const resultadoOperacional=receitaLiquida-custos-op; const resultadoLiquido=resultadoOperacional-fin;
+ const line=(label,value,cls='')=>`<div class="dre-line ${cls}"><span>${label}</span><b>${money(value)}</b></div>`;
+ dre.innerHTML=line('RECEITA BRUTA',income,'section')+line('(-) Deduções da receita',-deducoes)+line('= RECEITA LÍQUIDA',receitaLiquida,'subtotal')+line('(-) Custos',-custos)+line('(-) Despesas operacionais',-op)+line('= RESULTADO OPERACIONAL',resultadoOperacional,'total')+line('(-) Despesas financeiras',-fin)+line('= RESULTADO LÍQUIDO',resultadoLiquido,'total')+line('Investimentos (fora da DRE)',invest,'muted');
+ const months=[];for(let i=11;i>=0;i--){const d=new Date();d.setMonth(d.getMonth()-i);const key=advISO(d).slice(0,7),v=advMonthTotals(key);months.push({key,...v})} annual.innerHTML=months.map(x=>`<div class='annual-row'><span>${x.key}</span><b>${money(x.income-x.expense)}</b><small>${money(x.income)} / ${money(x.expense)}</small></div>`).join("");
+}
 function advAnnualPdf(){const old=$('reportMonth')?.value;const data=[];for(let i=0;i<12;i++){const d=new Date(new Date().getFullYear(),i,1),k=advISO(d).slice(0,7),v=advMonthTotals(k);data.push([k,v.income,v.expense,v.income-v.expense])}const D=window.jspdf.jsPDF,d=new D();d.setFontSize(18);d.text("Relatório Financeiro Anual",14,18);d.setFontSize(10);d.text("Mês | Entradas | Saídas | Resultado",14,28);let y=36;data.forEach(r=>{d.text(`${r[0]} | ${money(r[1])} | ${money(r[2])} | ${money(r[3])}`,14,y);y+=7;if(y>280){d.addPage();y=18}});d.save(`financeiro-anual-${new Date().getFullYear()}.pdf`)}
 async function advGenerateRecurring(){
  if(!recurring.length)return;

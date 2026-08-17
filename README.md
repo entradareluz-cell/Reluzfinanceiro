@@ -1,87 +1,102 @@
-# Meu Financeiro — GitHub Pages + Firebase Firestore
+# RELUZ FINANCEIRO — Google Sheets + Apps Script
 
-Versão do sistema financeiro convertida de Supabase para **Firebase Authentication + Cloud Firestore**, mantendo a interface premium, Dashboard, lançamentos, categorias, cartões, recorrentes, metas, contas, relatórios, Excel e PDF.
+## Arquitetura
 
-## Estrutura
+- Front-end: GitHub Pages
+- Login: Firebase Authentication
+- Banco de dados: Google Sheets
+- API: Google Apps Script
+- Comprovantes/anexos: Firebase Storage (opcional, mantido para não perder a função de anexos)
 
-- `index.html` — interface
-- `css/style.css` — identidade visual
-- `js/config.js` — configuração pública do app Web Firebase
-- `js/app.js` — autenticação e banco Firestore
-- `firestore.rules` — segurança por usuário
-- `firebase.json` — referência das Rules
-- `.github/workflows/deploy.yml` — publicação automática no GitHub Pages
+## 1. Google Sheets
 
-## 1. Criar o projeto Firebase
+Crie uma planilha e abra **Extensões → Apps Script**.
 
-No Firebase Console, crie um projeto e registre um aplicativo Web.
+Cole o arquivo `Code.gs` deste pacote.
 
-Ative:
-1. Authentication → Sign-in method → Email/Password
-2. Firestore Database → Create database
-3. Publique o conteúdo de `firestore.rules`
+Execute a função `setupDatabase` uma vez e autorize o acesso.
 
-## 2. Configurar o sistema
+## 2. Publicar o Apps Script
 
-Abra `js/config.js` e substitua os valores `COLE_AQUI...` / `SEU-PROJETO...` pelos dados do aplicativo Web do Firebase.
+Em **Implantar → Nova implantação**:
 
-A configuração Web do Firebase pode ficar no frontend. **Nunca coloque neste repositório uma service account, private key ou credencial administrativa.**
+- Tipo: Aplicativo da Web
+- Executar como: Eu
+- Quem tem acesso: Qualquer pessoa
 
-## 3. Criar o repositório GitHub
+A URL usada pelo sistema já está configurada no `app.js`:
 
-Crie um repositório, por exemplo `meu-financeiro`, e envie todos os arquivos desta pasta para o branch `main`.
+`https://script.google.com/macros/s/AKfycbwNTGqkiHjOVEbFrxfN409gY0DPr8sAwoJ_q0Zc1hStpXgAfoDC4ZtvE5Uamq_7qiyl/exec`
 
-O workflow em `.github/workflows/deploy.yml` publica automaticamente o conteúdo no GitHub Pages a cada push.
+Se você criar uma nova implantação/URL, altere `API_URL` no `app.js`.
 
-## 4. Ativar o GitHub Pages
+## 3. Atualizar uma implantação existente
 
-No repositório:
-`Settings → Pages → Build and deployment → Source: GitHub Actions`
+Se você já tinha publicado o Apps Script, substitua o código pelo `Code.gs` novo, salve e publique uma nova versão da mesma implantação. Não crie uma URL diferente se quiser manter o `API_URL` atual.
 
-Depois do primeiro push, abra `Actions` e aguarde o workflow terminar.
+## 4. Primeiro teste
 
-A URL padrão será parecida com:
-`https://SEU-USUARIO.github.io/meu-financeiro/`
+Abra no navegador:
 
-## 5. Segurança
+`.../exec?action=health`
 
-As Rules usam `request.auth.uid` para garantir que cada usuário só leia e altere seus próprios documentos. As consultas do frontend também filtram por `user_id`.
+Deve retornar JSON com:
 
-Coleções usadas:
-- `users`
-- `categories`
-- `accounts`
-- `cards`
-- `transactions`
-- `recurring`
-- `goals`
+`RELUZ FINANCEIRO API — Google Sheets funcionando.`
 
-## Observação
+Depois:
 
-O sistema usa módulos Firebase diretamente pela CDN, sem necessidade de Node/npm para funcionar no GitHub Pages. A documentação oficial do Firebase recomenda a API modular para integrações novas; para produção maior, este projeto pode posteriormente ser migrado para Vite/npm e receber build otimizado.
+`.../exec?action=setup`
 
+Isso cria/atualiza as abas.
 
-## Funcionalidades avançadas incluídas
-- Dashboard com saldo, entradas, saídas, resultado, contas a pagar/receber, cartões, evolução e comparação mensal.
-- Lançamentos com subcategoria, competência, pagamento/recebimento, forma de pagamento, recorrência, parcelamento e comprovante via Firebase Storage.
-- Cartões com limite, utilização, disponível, fechamento e vencimento.
-- Contas correntes, poupança, dinheiro, PIX e transferências entre contas.
-- Contas a pagar/receber, vencidas e projeções de 30/60/90 dias.
-- Recorrências com geração automática das próximas ocorrências.
-- Metas com progresso.
-- Relatórios, DRE simplificada, comparativo mensal, PDF e Excel.
-- Calendário financeiro e busca global.
+## 5. Dados
 
-## Firebase Storage
-Publique também `storage.rules` em Firebase Storage > Rules. O upload de comprovantes fica limitado a 10 MB por arquivo e cada usuário só acessa seus próprios comprovantes.
+As principais abas são:
 
+- LANCAMENTOS
+- CATEGORIAS
+- CONTAS
+- CARTOES
+- TAXAS
+- PARCELAS
+- RECEBIMENTOS
+- RECORRENTES
+- METAS
+- PEDIDOS
+- CLIENTES
+- FORNECEDORES
+- PROJETOS
+- USUARIOS
 
-## Correção de categorias
-As consultas de dados agora são filtradas por `user_id` antes de chegar ao Firestore, e o cadastro de categorias grava diretamente com o UID do usuário. Isso evita o bloqueio das Rules por consultas não filtradas.
+O Apps Script cria novas colunas automaticamente quando o front-end enviar um campo novo.
 
-### Recebimentos e pagamentos em múltiplas formas
-- Status `Pagamento parcial` abre automaticamente o detalhamento.
-- `Múltiplas formas` permite dividir o valor entre PIX, cartão, boleto, dinheiro etc.
-- Cada forma possui seu próprio valor.
-- Cartão permite parcelas e taxa da maquininha; a taxa e o líquido estimado são calculados na tela.
-- Cartões podem ter uma taxa padrão cadastrada e essa taxa é sugerida automaticamente no lançamento.
+## 6. Funcionalidades preservadas
+
+- Login/cadastro
+- Lançamentos
+- Categorias
+- Contas
+- Cartões
+- Taxas de maquininha
+- Múltiplas formas de pagamento
+- Pagamento parcial
+- Parcelamento
+- Parcelas futuras
+- Pedido/metal
+- Valor do metal
+- KG inicial/final
+- DRE
+- Dashboard
+- Metas
+- Recorrentes
+- Relatórios
+- Busca
+- PDF/Excel
+- Edição de lançamento
+
+## Segurança
+
+O login continua sendo validado pelo Firebase Authentication. O Apps Script recebe o `user_id` do usuário autenticado e grava os registros na planilha.
+
+Para uma implantação empresarial com múltiplos usuários, recomenda-se posteriormente validar o token do Firebase no backend antes de aceitar operações de escrita.
