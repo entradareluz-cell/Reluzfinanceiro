@@ -328,7 +328,10 @@ function list_(sheetName, userId) {
   return values.slice(1)
     .filter(r => r.some(v => v !== ""))
     .map(r => recordFromRow_(h,r))
-    .filter(r => !userId || !("user_id" in r) || userKeys_(userId).some(k => String(r.user_id) === String(k)));
+    .filter(r => {
+      if (!userId) return true;
+      return ("user_id" in r) && userKeys_(userId).some(k => String(r.user_id) === String(k));
+    });
 }
 
 function listOwned_(sheetName, userId) {
@@ -695,6 +698,15 @@ function doGet(e) {
   } catch(err) { return out_({success:false,error:String(err.message||err)}); }
 }
 
+function assertClientWritable_(sheetName, auth) {
+  const name = assertSheet_(sheetName);
+  const blocked = [TABLES.USUARIOS, TABLES.AUDITORIA];
+  if (blocked.includes(name) && String(auth.perfil || "usuario").toLowerCase() !== "admin") {
+    throw new Error("Esta tabela é protegida e não pode ser alterada pelo usuário.");
+  }
+  return name;
+}
+
 function doPost(e) {
   try {
     const p=input_(e), action=p.action;
@@ -711,23 +723,23 @@ function doPost(e) {
     if(action==="save_transactions") return out_(Object.assign({success:true}, saveTransactions_(uid, p.dedupe_key||"", p.rows||[])));
     if(action==="save_multiple_payments") return out_(Object.assign({success:true}, saveMultiplePayments_(uid, p.transaction||{}, p.payments||[], p.dedupe_key||"")));
     if(action==="create") {
-      const sheet=assertSheet_(p.sheet); const record=Object.assign({},p.record||{}, {user_id:uid}); delete record.id;
+      const sheet=assertClientWritable_(p.sheet,auth); const record=Object.assign({},p.record||{}, {user_id:uid}); delete record.id;
       const created=create_(sheet,record); audit_(uid,"create",sheet,created.id,created); return out_({success:true,data:created});
     }
     if(action==="update") {
-      const sheet=assertSheet_(p.sheet); assertOwned_(sheet,p.id,uid);
+      const sheet=assertClientWritable_(p.sheet,auth); assertOwned_(sheet,p.id,uid);
       const data=sheet===TABLES.LANCAMENTOS ? updateTransaction_(uid,p.id,p.record||{}) : update_(sheet,p.id,Object.assign({},p.record||{},{user_id:uid}));
       audit_(uid,"update",sheet,p.id,data); return out_({success:true,data});
     }
     if(action==="upsert") {
-      const sheet=assertSheet_(p.sheet); const existing=p.id ? find_(sheet,p.id) : null;
+      const sheet=assertClientWritable_(p.sheet,auth); const existing=p.id ? find_(sheet,p.id) : null;
       if(existing) assertOwned_(sheet,p.id,uid);
       const record=Object.assign({},p.record||{},{user_id:uid});
       const data=existing ? update_(sheet,p.id,record) : upsert_(sheet,p.id,record);
       audit_(uid,existing?"update":"create",sheet,data.id,data); return out_({success:true,data});
     }
     if(action==="delete") {
-      const sheet=assertSheet_(p.sheet); assertOwned_(sheet,p.id,uid); const result=delete_(sheet,p.id); audit_(uid,"delete",sheet,p.id,result); return out_(result);
+      const sheet=assertClientWritable_(p.sheet,auth); assertOwned_(sheet,p.id,uid); const result=delete_(sheet,p.id); audit_(uid,"delete",sheet,p.id,result); return out_(result);
     }
     if(action==="remove_duplicate_categories") return out_({success:true,data:removeDuplicateCategories_(uid)});
     if(action==="dashboard") return out_({success:true,data:dashboard_(uid)});
@@ -821,7 +833,9 @@ function saveTransactions_(userId, dedupeKey, rows) {
         user_id: uid,
         dedupe_key: key
       });
-      created.push(create_(TABLES.LANCAMENTOS, rec));
+      const item = create_(TABLES.LANCAMENTOS, rec);
+      created.push(item);
+      audit_(uid, "create", TABLES.LANCAMENTOS, item.id, item);
     });
     return {duplicate:false, data:created};
   } finally {
