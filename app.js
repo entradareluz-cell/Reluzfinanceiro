@@ -558,12 +558,197 @@ function render(){
   $("recBody").innerHTML=recurring.map(r=>`<tr><td>${esc(r.description)}</td><td>${money(r.amount)}</td><td>${esc(r.categories?.name||"-")}</td><td>${r.due_day}</td><td>${r.start_date}</td><td>${r.end_date||"-"}</td></tr>`).join("");
   $("goals").innerHTML=goalsData();$("accountBody").innerHTML=accounts.map(a=>{let m=txs.filter(t=>t.account_id===a.id).reduce((s,t)=>s+(t.type==="entrada"?1:-1)*+t.amount,0);return`<tr><td>${esc(a.name)}</td><td>${esc(a.type)}</td><td>${money(a.initial_balance)}</td><td>${money(m)}</td><td>${money(+a.initial_balance+m)}</td></tr>`}).join("");dashboard();report();
 }
-function dashboard(){let m=$("dashMonth").value||thisMonth,r=txs.filter(t=>t.transaction_date.startsWith(m)),ins=r.filter(t=>t.type==="entrada").reduce((s,t)=>s+ +t.amount,0),out=r.filter(t=>t.type==="saida").reduce((s,t)=>s+ +t.amount,0),pending=txs.filter(t=>t.type==="saida"&&t.status==="pendente"&&t.transaction_date>=today).reduce((s,t)=>s+ +t.amount,0);$("inTotal").textContent=money(ins);$("outTotal").textContent=money(out);$("result").textContent=money(ins-out);$("available").textContent=money(ins-out-pending);let daily={};r.forEach(t=>daily[t.transaction_date]=(daily[t.transaction_date]||0)+(t.type==="entrada"?+t.amount:-+t.amount));let cc={};r.filter(t=>t.type==="saida").forEach(t=>cc[t.categories?.name||"Outros"]=(cc[t.categories?.name||"Outros"]||0)+ +t.amount);flowChart?.destroy();catChart?.destroy();flowChart=new Chart($("flow"),{type:"line",data:{labels:Object.keys(daily),datasets:[{label:"Resultado",data:Object.values(daily)}]}});catChart=new Chart($("cats"),{type:"doughnut",data:{labels:Object.keys(cc),datasets:[{data:Object.values(cc)}]}});$("due").innerHTML=txs.filter(t=>t.type==="saida"&&t.status==="pendente").slice(0,5).map(t=>`<p>${t.transaction_date} · ${esc(t.description)}<br><b>${money(t.amount)}</b></p>`).join("")||"Nenhuma.";$("cardDash").innerHTML=cards.map(c=>`<p>${esc(c.name)} · ${money(txs.filter(t=>t.card_id===c.id&&t.type==="saida"&&t.transaction_date.startsWith(m)).reduce((s,t)=>s+ +t.amount,0))}</p>`).join("")||"Nenhum.";$("goalDash").innerHTML=goalsList.slice(0,5).map(g=>`<p>${esc(g.name)} · ${(g.current_amount/g.target_amount*100).toFixed(0)}%</p>`).join("")||"Nenhuma."}
-function report(){
-  const m=$("reportMonth").value||thisMonth,r=txs.filter(t=>String(t.transaction_date||"").startsWith(m));
-  const i=r.filter(t=>t.type==="entrada").reduce((s,t)=>s+ +(t.original_amount??t.amount),0),o=r.filter(t=>t.type==="saida").reduce((s,t)=>s+ +t.amount,0);
-  $("summary").innerHTML=`<p>Entradas <b>${money(i)}</b> · Saídas <b>${money(o)}</b> · Resultado <b>${money(i-o)}</b></p>`;
-  $("reportBody").innerHTML=r.map(t=>`<tr><td>${t.transaction_date}</td><td>${t.type}</td><td>${esc(t.name||t.description||"Sem nome")}</td><td>${esc(t.categories?.name||"-")}</td><td>${money(t.amount)}</td><td>${t.metal_value?`${money(t.metal_value)} · ${Number(t.initial_kg||0).toFixed(3)}kg → ${Number(t.final_kg||0).toFixed(3)}kg`:'-'}</td><td>${t.status}</td></tr>`).join("");
+function dashboard(){
+  const month=$("dashMonth").value||thisMonth;
+  const [yy,mm]=month.split("-").map(Number);
+  const daysInMonth=new Date(yy,mm,0).getDate();
+  const pad=n=>String(n).padStart(2,"0");
+  const dateKey=d=>`${yy}-${pad(mm)}-${pad(d)}`;
+  const labels=Array.from({length:daysInMonth},(_,i)=>dateKey(i+1));
+  const r=txs.filter(t=>String(t.transaction_date||"").startsWith(month));
+
+  const val=t=>Math.max(0,Number(t.amount)||0);
+  const entradas=r.filter(t=>String(t.type||"").toLowerCase()==="entrada");
+  const saidas=r.filter(t=>String(t.type||"").toLowerCase()==="saida");
+  const ins=entradas.reduce((s,t)=>s+val(t),0);
+  const out=saidas.reduce((s,t)=>s+val(t),0);
+
+  // Saldo inicial estimado: saldo inicial das contas + movimentações anteriores ao mês.
+  const monthStart=`${month}-01`;
+  const opening=accounts.reduce((s,a)=>s+(Number(a.initial_balance)||0),0)
+    +txs.filter(t=>String(t.transaction_date||"")<monthStart)
+      .reduce((s,t)=>s+(String(t.type||"").toLowerCase()==="entrada"?val(t):-val(t)),0);
+
+  const pending=txs.filter(t=>String(t.type||"").toLowerCase()==="saida"
+    &&String(t.status||"").toLowerCase()==="pendente"
+    &&String(t.transaction_date||"")>=today)
+    .reduce((s,t)=>s+val(t),0);
+
+  $("inTotal").textContent=money(ins);
+  $("outTotal").textContent=money(out);
+  $("result").textContent=money(ins-out);
+  $("available").textContent=money(opening+ins-out-pending);
+
+  const dailyIn=Object.fromEntries(labels.map(d=>[d,0]));
+  const dailyOut=Object.fromEntries(labels.map(d=>[d,0]));
+  entradas.forEach(t=>{if(dailyIn[t.transaction_date]!==undefined) dailyIn[t.transaction_date]+=val(t)});
+  saidas.forEach(t=>{if(dailyOut[t.transaction_date]!==undefined) dailyOut[t.transaction_date]+=val(t)});
+
+  let running=opening;
+  const balance=labels.map(d=>{
+    running+=(dailyIn[d]||0)-(dailyOut[d]||0);
+    return Number(running.toFixed(2));
+  });
+
+  // Comparação real com o mês anterior.
+  const prevDate=new Date(yy,mm-2,1);
+  const prevMonth=`${prevDate.getFullYear()}-${pad(prevDate.getMonth()+1)}`;
+  const prevTx=txs.filter(t=>String(t.transaction_date||"").startsWith(prevMonth));
+  const prevIn=prevTx.filter(t=>t.type==="entrada").reduce((s,t)=>s+val(t),0);
+  const prevOut=prevTx.filter(t=>t.type==="saida").reduce((s,t)=>s+val(t),0);
+  const currentResult=ins-out;
+  const previousResult=prevIn-prevOut;
+  const variation=previousResult===0?(currentResult===0?0:100):((currentResult-previousResult)/Math.abs(previousResult))*100;
+  $("monthCompare").textContent=`${variation>=0?"+":""}${variation.toFixed(1)}%`;
+
+  // Gastos por categoria: usa category_id e também suporta categorias embutidas.
+  const categoryMap={};
+  categories.forEach(c=>categoryMap[String(c.id)]=String(c.name||"Outros"));
+  const cc={};
+  saidas.forEach(t=>{
+    const name=categoryMap[String(t.category_id)]||t.categories?.name||t.category_name||"Outros";
+    cc[name]=(cc[name]||0)+val(t);
+  });
+  const catEntries=Object.entries(cc).sort((a,b)=>b[1]-a[1]);
+  const topCats=catEntries.slice(0,7);
+  const other=catEntries.slice(7).reduce((s,[,v])=>s+v,0);
+  if(other>0) topCats.push(["Outras",other]);
+
+  flowChart?.destroy();
+  catChart?.destroy();
+
+  const moneyShort=v=>money(v);
+  const gridColor="rgba(100,116,139,.12)";
+  const textColor="#64748b";
+
+  flowChart=new Chart($("flow"),{
+    type:"bar",
+    data:{
+      labels:labels.map(d=>d.slice(8)),
+      datasets:[
+        {
+          type:"bar",
+          label:"Entradas",
+          data:labels.map(d=>dailyIn[d]),
+          backgroundColor:"rgba(34,197,94,.65)",
+          borderColor:"rgba(22,163,74,1)",
+          borderWidth:1,
+          borderRadius:5,
+          maxBarThickness:18
+        },
+        {
+          type:"bar",
+          label:"Saídas",
+          data:labels.map(d=>dailyOut[d]),
+          backgroundColor:"rgba(239,68,68,.58)",
+          borderColor:"rgba(220,38,38,1)",
+          borderWidth:1,
+          borderRadius:5,
+          maxBarThickness:18
+        },
+        {
+          type:"line",
+          label:"Saldo acumulado",
+          data:balance,
+          borderColor:"#2563eb",
+          backgroundColor:"rgba(37,99,235,.10)",
+          borderWidth:3,
+          pointRadius:0,
+          pointHoverRadius:5,
+          tension:.35,
+          fill:true,
+          yAxisID:"yBalance"
+        }
+      ]
+    },
+    options:{
+      responsive:true,
+      maintainAspectRatio:false,
+      interaction:{mode:"index",intersect:false},
+      animation:{duration:650,easing:"easeOutQuart"},
+      plugins:{
+        legend:{position:"top",labels:{usePointStyle:true,boxWidth:8,color:textColor}},
+        tooltip:{
+          callbacks:{
+            label:ctx=>`${ctx.dataset.label}: ${moneyShort(ctx.parsed.y)}`
+          }
+        }
+      },
+      scales:{
+        x:{grid:{display:false},ticks:{color:textColor,maxTicksLimit:12}},
+        y:{
+          beginAtZero:true,
+          grid:{color:gridColor},
+          ticks:{color:textColor,callback:v=>moneyShort(v)}
+        },
+        yBalance:{
+          position:"right",
+          grid:{drawOnChartArea:false},
+          ticks:{color:"#2563eb",callback:v=>moneyShort(v)}
+        }
+      }
+    }
+  });
+
+  catChart=new Chart($("cats"),{
+    type:"doughnut",
+    data:{
+      labels:topCats.length?topCats.map(([n])=>n):["Sem despesas"],
+      datasets:[{
+        data:topCats.length?topCats.map(([,v])=>v):[1],
+        backgroundColor:topCats.length
+          ?["#2563eb","#7c3aed","#f59e0b","#ef4444","#10b981","#06b6d4","#64748b","#94a3b8"]
+          :["#e2e8f0"],
+        borderColor:"#ffffff",
+        borderWidth:3,
+        hoverOffset:7
+      }]
+    },
+    options:{
+      responsive:true,
+      maintainAspectRatio:false,
+      cutout:"66%",
+      animation:{duration:700,easing:"easeOutQuart"},
+      plugins:{
+        legend:{position:"bottom",labels:{usePointStyle:true,padding:14,color:textColor}},
+        tooltip:{
+          callbacks:{
+            label:ctx=>{
+              if(!topCats.length)return "Sem despesas";
+              const total=topCats.reduce((s,[,v])=>s+v,0);
+              const v=Number(ctx.raw)||0;
+              return `${ctx.label}: ${money(v)} (${total?((v/total)*100).toFixed(1):0}%)`;
+            }
+          }
+        }
+      }
+    }
+  });
+
+  $("due").innerHTML=txs.filter(t=>t.type==="saida"&&t.status==="pendente").slice(0,5)
+    .map(t=>`<p>${t.transaction_date} · ${esc(t.name||t.description||"Sem nome")}<br><b>${money(t.amount)}</b></p>`).join("")||"Nenhuma.";
+
+  $("cardDash").innerHTML=cards.map(c=>{
+    const total=txs.filter(t=>t.card_id===c.id&&t.type==="saida"&&String(t.transaction_date||"").startsWith(month))
+      .reduce((s,t)=>s+val(t),0);
+    return `<p>${esc(c.name)} · ${money(total)}</p>`;
+  }).join("")||"Nenhum.";
+
+  $("goalDash").innerHTML=goalsList.slice(0,5).map(g=>{
+    const target=Number(g.target_amount)||0,current=Number(g.current_amount)||0;
+    const pct=target?Math.min(100,(current/target)*100):0;
+    return `<p>${esc(g.name)} · ${pct.toFixed(0)}%</p>`;
+  }).join("")||"Nenhuma.";
 }
 function excel(){
  const m=$("reportMonth").value||thisMonth,r=txs.filter(t=>String(t.transaction_date||"").startsWith(m));

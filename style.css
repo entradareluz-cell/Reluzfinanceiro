@@ -161,3 +161,18 @@ header{height:72px!important;padding:0 26px!important;position:sticky;top:0;z-in
   0%,80%,100%{opacity:.25;transform:translateY(0)}
   40%{opacity:1;transform:translateY(-3px)}
 }
+
+/* ===== Gráficos financeiros premium ===== */
+.cols > .card:has(#flow),
+.cols > .card:has(#cats){
+  min-height:390px;
+}
+#flow,#cats{
+  width:100% !important;
+  height:310px !important;
+  max-height:310px;
+}
+.cols > .card:has(#flow) h3,
+.cols > .card:has(#cats) h3{
+  margin-bottom:12px;
+}
