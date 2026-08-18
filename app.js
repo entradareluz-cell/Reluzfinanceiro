@@ -159,56 +159,21 @@ document.addEventListener("DOMContentLoaded",async()=>{
   }catch(err){console.error(err);loginView();msg("authMsg",friendlyError(err))}
 });
 function loginView(){$("loginView").classList.remove("hidden");$("app").classList.add("hidden")}
-async function start(u){
-  user=u;
-  setAuthLoading(true,"Login confirmado...","Mantendo a tela de login enquanto conectamos ao Google Sheets.");
-
-  try{
-    // O usuário já veio autenticado do Apps Script. Não fazemos uma segunda
-    // consulta obrigatória em USUARIOS, pois ela podia bloquear a entrada.
-    $("userName").textContent=String(
-      u?.displayName || u?.name || u?.email || "Usuário"
-    );
-
-    setAuthLoading(true,"Conectando ao Google Sheets...","Validando a sessão e preparando seus dados.");
-
-    // Carregamento principal. A função load foi preparada para tolerar falhas
-    // de tabelas opcionais sem impedir a abertura do sistema.
-    await load();
-
-    setAuthLoading(true,"Finalizando...","Dashboard pronto. Abrindo seu financeiro...");
-
-    // Renderiza o dashboard antes de esconder o login.
-    try{ page("dashboard"); }catch(err){ console.warn("Falha ao selecionar dashboard:",err); }
-
-    await new Promise(resolve=>setTimeout(resolve,120));
-
-    $("app").classList.remove("hidden");
-    $("app").classList.add("app-ready");
-
-    // Transição suave, sem troca seca.
-    $("loginView").classList.add("auth-exit");
-    await new Promise(resolve=>setTimeout(resolve,420));
-
-    $("loginView").classList.add("hidden");
-    $("loginView").classList.remove("auth-exit");
-    setAuthLoading(false);
-    window.__reluzLoaded=true;
-  }catch(err){
-    console.error("RELUZ: falha ao iniciar sessão:",err);
-    setAuthLoading(false);
-    $("app")?.classList.add("hidden");
-    $("loginView")?.classList.remove("hidden");
-    msg("authMsg","Entrou, mas não foi possível carregar os dados. Verifique a conexão com o Google Sheets.");
-    throw err;
-  }
-}
+async function start(u){user=u;const r=await getDoc(doc(null,"users",u.uid));$("userName").textContent=r.exists()?r.data().name:(u.displayName||u.email);$("loginView").classList.add("hidden");$("app").classList.remove("hidden");await load();page("dashboard")}
 function setAuthLoading(on,title="Entrando na sua conta...",text="Conectando ao Google Sheets e carregando seus dados."){
   const overlay=$("authLoading");
   if(overlay){
     $("authLoadingTitle").textContent=title;
     $("authLoadingText").textContent=text;
     overlay.classList.toggle("hidden",!on);
+    const bar=$("authLoadingProgressBar");
+    if(bar){
+      bar.classList.remove("p25","p55","p80","p100");
+      if(on){
+        const t=String(title||"").toLowerCase();
+        bar.classList.add(t.includes("final")?"p100":t.includes("carregando")||t.includes("preparando")?"p55":"p25");
+      }
+    }
   }
   [$("loginSubmit"),$("signupSubmit")].forEach(b=>{if(b)b.disabled=!!on;});
 }
@@ -226,11 +191,11 @@ async function login(e){
   msg("authMsg","");
   const button=e.submitter||$("loginSubmit");
   setButtonLoading(button,true,"Entrando...");
-  setAuthLoading(true,"Entrando na sua conta...","Validando seus dados e carregando seu financeiro.");
+  setAuthLoading(true,"Entrando na sua conta...","Validando seus dados com segurança.");
   try{
     const r=await sb.auth.signInWithPassword({email:$("loginEmail").value.trim(),password:$("loginPassword").value});
     if(r.error) throw r.error;
-    setAuthLoading(true,"Login confirmado...","Agora vamos carregar seu financeiro com segurança.");
+    setAuthLoading(true,"Carregando seu financeiro...","Login confirmado. Buscando categorias, contas, cartões e lançamentos.");
     await start(r.data.user);
   }catch(err){
     console.error("Erro ao entrar:",err);
@@ -281,82 +246,44 @@ async function deduplicateCategories(rows){
 }
 
 async function load(){
-  if(!user?.uid) throw new Error("Sessão sem usuário.");
-
-  const uid=String(user.uid);
-  const request=(sheet, extra={})=>api("list",{sheet:sheetName(sheet),...extra});
-
-  const jobs=[
-    ["categories","CATEGORIAS"],
-    ["accounts","CONTAS"],
-    ["cards","CARTOES"],
-    ["recurring","RECORRENTES"],
-    ["goals","METAS"],
-    ["transactions","LANCAMENTOS"],
-    ["machine_rates","TAXAS"]
-  ];
-
-  const results=await Promise.all(jobs.map(async ([key,sheet])=>{
-    try{
-      const r=await request(sheet);
-      let data=Array.isArray(r.data)?r.data:[];
-      // O filtro por usuário é feito no cliente porque o Apps Script já
-      // devolve as linhas da planilha.
-      if(data.some(x=>Object.prototype.hasOwnProperty.call(x,"user_id"))){
-        data=data.filter(x=>String(x.user_id||"")===uid);
-      }
-      return {key,data,error:null};
-    }catch(error){
-      console.error(`Erro ao carregar ${key}:`,error);
-      return {key,data:[],error};
-    }
-  }));
-
-  const by=key=>results.find(x=>x.key===key)||{data:[],error:null};
-
-  categories=(by("categories").data||[]);
-  categories=await deduplicateCategories(categories);
-  categories.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||""),"pt-BR"));
+  if(!user?.uid) return;
+  // Toda consulta é filtrada pelo UID para manter os dados de cada usuário separados na planilha.
+  const uid=user.uid;
+  let [a,b,c,d,e,f,g]=await Promise.all([
+    sb.from("categories").select("*").eq("user_id",uid),
+    sb.from("accounts").select("*").eq("user_id",uid),
+    sb.from("cards").select("*").eq("user_id",uid),
+    sb.from("recurring").select("*,categories(name)").eq("user_id",uid),
+    sb.from("goals").select("*").eq("user_id",uid),
+    sb.from("transactions").select("*,categories(name),accounts(name),cards(name)").eq("user_id",uid).limit(3000),
+    sb.from("machine_rates").select("*").eq("user_id",uid)
+  ]);
+  const names=["categories","accounts","cards","recurring","goals","transactions","machine_rates"];
+  [a,b,c,d,e,f].forEach((r,i)=>{if(r.error) console.error("Erro ao carregar "+names[i],r.error)});
+  categories=await deduplicateCategories(a.data||[]);categories.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
   categoriesCache=categories;
-
-  accounts=(by("accounts").data||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||""),"pt-BR"));
+  accounts=(b.data||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
   accountsCache=accounts;
-
-  cards=(by("cards").data||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||""),"pt-BR"));
+  cards=(c.data||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
   cardsCache=cards;
-
-  // Se ainda não houver categorias, cria as padrão. Erro aqui não impede
-  // o restante do sistema de abrir.
   if(!categories.length){
-    try{
-      const seed=await api("create",{sheet:"CATEGORIAS",record:{
-        user_id:uid,name:"Outros",type:"saida",active:true
-      }});
-      if(seed.data) categories=[seed.data];
+    const defaults=[['Salário','entrada'],['Extra','entrada'],['Reembolso','entrada'],['Outros recebimentos','entrada'],['Casa','saida'],['Mercado','saida'],['Alimentação','saida'],['Carro','saida'],['Combustível','saida'],['Contas','saida'],['Celular/Internet','saida'],['Cartão','saida'],['Lazer','saida'],['Compras','saida'],['Pets','saida'],['Família','saida'],['Investimentos','saida'],['Outros','saida']];
+    const seed=await sb.from("categories").insert(defaults.map(([name,type])=>({user_id:uid,name,type})));
+    if(seed.error) console.error("Erro ao criar categorias padrão",seed.error);
+    else {
+      const fresh=await sb.from("categories").select("*").eq("user_id",uid);
+      categories=await deduplicateCategories(fresh.data||[]);categories.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
       categoriesCache=categories;
-    }catch(error){
-      console.warn("Não foi possível criar categoria padrão:",error);
     }
   }
-
-  recurring=by("recurring").data||[];
-  goalsList=by("goals").data||[];
-  txs=by("transactions").data||[];
-  machineRates=(by("machine_rates").data||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||""),"pt-BR"));
-
+  recurring=d.data||[];
+  goalsList=e.data||[];
+  txs=f.data||[];
+  machineRates=(g.data||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
   txs.sort((x,y)=>String(y.transaction_date||"").localeCompare(String(x.transaction_date||"")));
   txs.forEach(t=>joinRelations("transactions",t));
   recurring.forEach(r=>joinRelations("recurring",r));
-
-  // Preenche a interface mesmo que alguma tabela opcional esteja vazia.
-  fill();
-  render();
-  window.__reluzLoaded=true;
-
-  const failed=results.filter(x=>x.error).map(x=>x.key);
-  if(failed.length){
-    console.warn("RELUZ abriu com tabelas que não puderam ser carregadas:",failed);
-  }
+  fill();render();window.__reluzLoaded=true
 }
 function fill(){
   fillCategorySelects();
@@ -608,197 +535,12 @@ function render(){
   $("recBody").innerHTML=recurring.map(r=>`<tr><td>${esc(r.description)}</td><td>${money(r.amount)}</td><td>${esc(r.categories?.name||"-")}</td><td>${r.due_day}</td><td>${r.start_date}</td><td>${r.end_date||"-"}</td></tr>`).join("");
   $("goals").innerHTML=goalsData();$("accountBody").innerHTML=accounts.map(a=>{let m=txs.filter(t=>t.account_id===a.id).reduce((s,t)=>s+(t.type==="entrada"?1:-1)*+t.amount,0);return`<tr><td>${esc(a.name)}</td><td>${esc(a.type)}</td><td>${money(a.initial_balance)}</td><td>${money(m)}</td><td>${money(+a.initial_balance+m)}</td></tr>`}).join("");dashboard();report();
 }
-function dashboard(){
-  const month=$("dashMonth").value||thisMonth;
-  const [yy,mm]=month.split("-").map(Number);
-  const daysInMonth=new Date(yy,mm,0).getDate();
-  const pad=n=>String(n).padStart(2,"0");
-  const dateKey=d=>`${yy}-${pad(mm)}-${pad(d)}`;
-  const labels=Array.from({length:daysInMonth},(_,i)=>dateKey(i+1));
-  const r=txs.filter(t=>String(t.transaction_date||"").startsWith(month));
-
-  const val=t=>Math.max(0,Number(t.amount)||0);
-  const entradas=r.filter(t=>String(t.type||"").toLowerCase()==="entrada");
-  const saidas=r.filter(t=>String(t.type||"").toLowerCase()==="saida");
-  const ins=entradas.reduce((s,t)=>s+val(t),0);
-  const out=saidas.reduce((s,t)=>s+val(t),0);
-
-  // Saldo inicial estimado: saldo inicial das contas + movimentações anteriores ao mês.
-  const monthStart=`${month}-01`;
-  const opening=accounts.reduce((s,a)=>s+(Number(a.initial_balance)||0),0)
-    +txs.filter(t=>String(t.transaction_date||"")<monthStart)
-      .reduce((s,t)=>s+(String(t.type||"").toLowerCase()==="entrada"?val(t):-val(t)),0);
-
-  const pending=txs.filter(t=>String(t.type||"").toLowerCase()==="saida"
-    &&String(t.status||"").toLowerCase()==="pendente"
-    &&String(t.transaction_date||"")>=today)
-    .reduce((s,t)=>s+val(t),0);
-
-  $("inTotal").textContent=money(ins);
-  $("outTotal").textContent=money(out);
-  $("result").textContent=money(ins-out);
-  $("available").textContent=money(opening+ins-out-pending);
-
-  const dailyIn=Object.fromEntries(labels.map(d=>[d,0]));
-  const dailyOut=Object.fromEntries(labels.map(d=>[d,0]));
-  entradas.forEach(t=>{if(dailyIn[t.transaction_date]!==undefined) dailyIn[t.transaction_date]+=val(t)});
-  saidas.forEach(t=>{if(dailyOut[t.transaction_date]!==undefined) dailyOut[t.transaction_date]+=val(t)});
-
-  let running=opening;
-  const balance=labels.map(d=>{
-    running+=(dailyIn[d]||0)-(dailyOut[d]||0);
-    return Number(running.toFixed(2));
-  });
-
-  // Comparação real com o mês anterior.
-  const prevDate=new Date(yy,mm-2,1);
-  const prevMonth=`${prevDate.getFullYear()}-${pad(prevDate.getMonth()+1)}`;
-  const prevTx=txs.filter(t=>String(t.transaction_date||"").startsWith(prevMonth));
-  const prevIn=prevTx.filter(t=>t.type==="entrada").reduce((s,t)=>s+val(t),0);
-  const prevOut=prevTx.filter(t=>t.type==="saida").reduce((s,t)=>s+val(t),0);
-  const currentResult=ins-out;
-  const previousResult=prevIn-prevOut;
-  const variation=previousResult===0?(currentResult===0?0:100):((currentResult-previousResult)/Math.abs(previousResult))*100;
-  $("monthCompare").textContent=`${variation>=0?"+":""}${variation.toFixed(1)}%`;
-
-  // Gastos por categoria: usa category_id e também suporta categorias embutidas.
-  const categoryMap={};
-  categories.forEach(c=>categoryMap[String(c.id)]=String(c.name||"Outros"));
-  const cc={};
-  saidas.forEach(t=>{
-    const name=categoryMap[String(t.category_id)]||t.categories?.name||t.category_name||"Outros";
-    cc[name]=(cc[name]||0)+val(t);
-  });
-  const catEntries=Object.entries(cc).sort((a,b)=>b[1]-a[1]);
-  const topCats=catEntries.slice(0,7);
-  const other=catEntries.slice(7).reduce((s,[,v])=>s+v,0);
-  if(other>0) topCats.push(["Outras",other]);
-
-  flowChart?.destroy();
-  catChart?.destroy();
-
-  const moneyShort=v=>money(v);
-  const gridColor="rgba(100,116,139,.12)";
-  const textColor="#64748b";
-
-  flowChart=new Chart($("flow"),{
-    type:"bar",
-    data:{
-      labels:labels.map(d=>d.slice(8)),
-      datasets:[
-        {
-          type:"bar",
-          label:"Entradas",
-          data:labels.map(d=>dailyIn[d]),
-          backgroundColor:"rgba(34,197,94,.65)",
-          borderColor:"rgba(22,163,74,1)",
-          borderWidth:1,
-          borderRadius:5,
-          maxBarThickness:18
-        },
-        {
-          type:"bar",
-          label:"Saídas",
-          data:labels.map(d=>dailyOut[d]),
-          backgroundColor:"rgba(239,68,68,.58)",
-          borderColor:"rgba(220,38,38,1)",
-          borderWidth:1,
-          borderRadius:5,
-          maxBarThickness:18
-        },
-        {
-          type:"line",
-          label:"Saldo acumulado",
-          data:balance,
-          borderColor:"#2563eb",
-          backgroundColor:"rgba(37,99,235,.10)",
-          borderWidth:3,
-          pointRadius:0,
-          pointHoverRadius:5,
-          tension:.35,
-          fill:true,
-          yAxisID:"yBalance"
-        }
-      ]
-    },
-    options:{
-      responsive:true,
-      maintainAspectRatio:false,
-      interaction:{mode:"index",intersect:false},
-      animation:{duration:650,easing:"easeOutQuart"},
-      plugins:{
-        legend:{position:"top",labels:{usePointStyle:true,boxWidth:8,color:textColor}},
-        tooltip:{
-          callbacks:{
-            label:ctx=>`${ctx.dataset.label}: ${moneyShort(ctx.parsed.y)}`
-          }
-        }
-      },
-      scales:{
-        x:{grid:{display:false},ticks:{color:textColor,maxTicksLimit:12}},
-        y:{
-          beginAtZero:true,
-          grid:{color:gridColor},
-          ticks:{color:textColor,callback:v=>moneyShort(v)}
-        },
-        yBalance:{
-          position:"right",
-          grid:{drawOnChartArea:false},
-          ticks:{color:"#2563eb",callback:v=>moneyShort(v)}
-        }
-      }
-    }
-  });
-
-  catChart=new Chart($("cats"),{
-    type:"doughnut",
-    data:{
-      labels:topCats.length?topCats.map(([n])=>n):["Sem despesas"],
-      datasets:[{
-        data:topCats.length?topCats.map(([,v])=>v):[1],
-        backgroundColor:topCats.length
-          ?["#2563eb","#7c3aed","#f59e0b","#ef4444","#10b981","#06b6d4","#64748b","#94a3b8"]
-          :["#e2e8f0"],
-        borderColor:"#ffffff",
-        borderWidth:3,
-        hoverOffset:7
-      }]
-    },
-    options:{
-      responsive:true,
-      maintainAspectRatio:false,
-      cutout:"66%",
-      animation:{duration:700,easing:"easeOutQuart"},
-      plugins:{
-        legend:{position:"bottom",labels:{usePointStyle:true,padding:14,color:textColor}},
-        tooltip:{
-          callbacks:{
-            label:ctx=>{
-              if(!topCats.length)return "Sem despesas";
-              const total=topCats.reduce((s,[,v])=>s+v,0);
-              const v=Number(ctx.raw)||0;
-              return `${ctx.label}: ${money(v)} (${total?((v/total)*100).toFixed(1):0}%)`;
-            }
-          }
-        }
-      }
-    }
-  });
-
-  $("due").innerHTML=txs.filter(t=>t.type==="saida"&&t.status==="pendente").slice(0,5)
-    .map(t=>`<p>${t.transaction_date} · ${esc(t.name||t.description||"Sem nome")}<br><b>${money(t.amount)}</b></p>`).join("")||"Nenhuma.";
-
-  $("cardDash").innerHTML=cards.map(c=>{
-    const total=txs.filter(t=>t.card_id===c.id&&t.type==="saida"&&String(t.transaction_date||"").startsWith(month))
-      .reduce((s,t)=>s+val(t),0);
-    return `<p>${esc(c.name)} · ${money(total)}</p>`;
-  }).join("")||"Nenhum.";
-
-  $("goalDash").innerHTML=goalsList.slice(0,5).map(g=>{
-    const target=Number(g.target_amount)||0,current=Number(g.current_amount)||0;
-    const pct=target?Math.min(100,(current/target)*100):0;
-    return `<p>${esc(g.name)} · ${pct.toFixed(0)}%</p>`;
-  }).join("")||"Nenhuma.";
+function dashboard(){let m=$("dashMonth").value||thisMonth,r=txs.filter(t=>t.transaction_date.startsWith(m)),ins=r.filter(t=>t.type==="entrada").reduce((s,t)=>s+ +t.amount,0),out=r.filter(t=>t.type==="saida").reduce((s,t)=>s+ +t.amount,0),pending=txs.filter(t=>t.type==="saida"&&t.status==="pendente"&&t.transaction_date>=today).reduce((s,t)=>s+ +t.amount,0);$("inTotal").textContent=money(ins);$("outTotal").textContent=money(out);$("result").textContent=money(ins-out);$("available").textContent=money(ins-out-pending);let daily={};r.forEach(t=>daily[t.transaction_date]=(daily[t.transaction_date]||0)+(t.type==="entrada"?+t.amount:-+t.amount));let cc={};r.filter(t=>t.type==="saida").forEach(t=>cc[t.categories?.name||"Outros"]=(cc[t.categories?.name||"Outros"]||0)+ +t.amount);flowChart?.destroy();catChart?.destroy();flowChart=new Chart($("flow"),{type:"line",data:{labels:Object.keys(daily),datasets:[{label:"Resultado",data:Object.values(daily)}]}});catChart=new Chart($("cats"),{type:"doughnut",data:{labels:Object.keys(cc),datasets:[{data:Object.values(cc)}]}});$("due").innerHTML=txs.filter(t=>t.type==="saida"&&t.status==="pendente").slice(0,5).map(t=>`<p>${t.transaction_date} · ${esc(t.description)}<br><b>${money(t.amount)}</b></p>`).join("")||"Nenhuma.";$("cardDash").innerHTML=cards.map(c=>`<p>${esc(c.name)} · ${money(txs.filter(t=>t.card_id===c.id&&t.type==="saida"&&t.transaction_date.startsWith(m)).reduce((s,t)=>s+ +t.amount,0))}</p>`).join("")||"Nenhum.";$("goalDash").innerHTML=goalsList.slice(0,5).map(g=>`<p>${esc(g.name)} · ${(g.current_amount/g.target_amount*100).toFixed(0)}%</p>`).join("")||"Nenhuma."}
+function report(){
+  const m=$("reportMonth").value||thisMonth,r=txs.filter(t=>String(t.transaction_date||"").startsWith(m));
+  const i=r.filter(t=>t.type==="entrada").reduce((s,t)=>s+ +(t.original_amount??t.amount),0),o=r.filter(t=>t.type==="saida").reduce((s,t)=>s+ +t.amount,0);
+  $("summary").innerHTML=`<p>Entradas <b>${money(i)}</b> · Saídas <b>${money(o)}</b> · Resultado <b>${money(i-o)}</b></p>`;
+  $("reportBody").innerHTML=r.map(t=>`<tr><td>${t.transaction_date}</td><td>${t.type}</td><td>${esc(t.name||t.description||"Sem nome")}</td><td>${esc(t.categories?.name||"-")}</td><td>${money(t.amount)}</td><td>${t.metal_value?`${money(t.metal_value)} · ${Number(t.initial_kg||0).toFixed(3)}kg → ${Number(t.final_kg||0).toFixed(3)}kg`:'-'}</td><td>${t.status}</td></tr>`).join("");
 }
 function excel(){
  const m=$("reportMonth").value||thisMonth,r=txs.filter(t=>String(t.transaction_date||"").startsWith(m));
