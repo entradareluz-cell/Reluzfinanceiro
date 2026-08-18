@@ -96,3 +96,12 @@ O Apps Script cria novas colunas automaticamente quando o front-end enviar um ca
 A API do Apps Script é pública para permitir o funcionamento do GitHub Pages. Por isso, a autenticação do usuário é feita no Apps Script e as senhas são armazenadas apenas como hash SHA-256 na aba `USUARIOS`.
 
 Para um ambiente com vários usuários e dados altamente sensíveis, recomenda-se adicionar autenticação por token no Apps Script posteriormente.
+
+
+## Correção de duplicidade de lançamentos
+
+A versão atual adiciona proteção de idempotência ao salvamento de lançamentos. O botão de salvar fica bloqueado durante o envio e o Apps Script usa uma chave de segurança (`dedupe_key`) para impedir que o mesmo lançamento seja gravado novamente por duplo clique, reenvio ou repetição da requisição.
+
+A funcionalidade de múltiplas formas de pagamento, parcelamento e pagamento parcial foi preservada.
+
+Após atualizar o GitHub, publique uma nova versão do `Code.gs` na mesma implantação do Google Apps Script.

@@ -160,39 +160,62 @@ document.addEventListener("DOMContentLoaded",async()=>{
 });
 function loginView(){$("loginView").classList.remove("hidden");$("app").classList.add("hidden")}
 async function start(u){user=u;const r=await getDoc(doc(null,"users",u.uid));$("userName").textContent=r.exists()?r.data().name:(u.displayName||u.email);$("loginView").classList.add("hidden");$("app").classList.remove("hidden");await load();page("dashboard")}
+function setAuthLoading(on,title="Entrando na sua conta...",text="Conectando ao Google Sheets e carregando seus dados."){
+  const overlay=$("authLoading");
+  if(overlay){
+    $("authLoadingTitle").textContent=title;
+    $("authLoadingText").textContent=text;
+    overlay.classList.toggle("hidden",!on);
+  }
+  [$("loginSubmit"),$("signupSubmit")].forEach(b=>{if(b)b.disabled=!!on;});
+}
+function setButtonLoading(button,on,label){
+  if(!button)return;
+  button.classList.toggle("is-loading",!!on);
+  const text=button.querySelector(".btn-label");
+  const spinner=button.querySelector(".btn-spinner");
+  if(text && !text.dataset.original) text.dataset.original=text.textContent;
+  if(text) text.textContent=on?label:text.dataset.original;
+  if(spinner) spinner.classList.toggle("hidden",!on);
+}
 async function login(e){
   e.preventDefault();
   msg("authMsg","");
-  const button=e.submitter;
-  if(button) button.disabled=true;
+  const button=e.submitter||$("loginSubmit");
+  setButtonLoading(button,true,"Entrando...");
+  setAuthLoading(true,"Entrando na sua conta...","Validando seus dados e carregando seu financeiro.");
   try{
     const r=await sb.auth.signInWithPassword({email:$("loginEmail").value.trim(),password:$("loginPassword").value});
-    if(r.error){msg("authMsg",friendlyError(r.error));return;}
-    // O login já salvou a sessão. Agora iniciamos explicitamente o aplicativo.
-    // Antes isso dependia de onAuthStateChange, que não é disparado pelo
-    // adaptador local do Google Sheets; por isso o usuário ficava na tela de login.
+    if(r.error) throw r.error;
+    setAuthLoading(true,"Carregando seu financeiro...","Login confirmado. Aguarde enquanto seus dados são carregados.");
     await start(r.data.user);
   }catch(err){
     console.error("Erro ao entrar:",err);
+    setAuthLoading(false);
     msg("authMsg",friendlyError(err));
   }finally{
-    if(button) button.disabled=false;
+    setButtonLoading(button,false,"Entrando na sua conta");
+    if(!$("app")?.classList.contains("hidden")) setAuthLoading(false);
   }
 }
 async function signup(e){
   e.preventDefault();
   msg("authMsg","");
-  const button=e.submitter;
-  if(button) button.disabled=true;
+  const button=e.submitter||$("signupSubmit");
+  setButtonLoading(button,true,"Criando...");
+  setAuthLoading(true,"Criando sua conta...","Salvando seu acesso no Google Sheets.");
   try{
     const r=await sb.auth.signUp({email:$("signupEmail").value.trim(),password:$("signupPassword").value,options:{data:{name:$("signupName").value.trim()}}});
-    if(r.error){msg("authMsg",friendlyError(r.error));return;}
+    if(r.error) throw r.error;
+    setAuthLoading(true,"Preparando seu financeiro...","Conta criada. Carregando suas categorias e lançamentos.");
     await start(r.data.user);
   }catch(err){
     console.error("Erro ao criar conta:",err);
+    setAuthLoading(false);
     msg("authMsg",friendlyError(err));
   }finally{
-    if(button) button.disabled=false;
+    setButtonLoading(button,false,"Criar minha conta");
+    if(!$("app")?.classList.contains("hidden")) setAuthLoading(false);
   }
 }
 
@@ -430,7 +453,7 @@ async function editTx(id){
   $("txAmount").value=t.original_amount??t.amount??0;$("txDate").value=t.competence_date||t.transaction_date||today;$("txPaidDate").value=t.paid_date||"";$("txSubcategory").value=t.subcategory||"";$("txAccount").value=t.account_id||"";$("txCard").value=t.card_id||"";$("txMethod").value=t.payment_method||"pix";$("txStatus").value=t.status||"pago";$("txName").value=t.name||"";$("txDesc").value=t.description||"";$("txInstall").value=t.installment_total||1;$("txPaidAmount").value=t.payment_received_amount||t.amount||"";$("txNotes").value=t.notes||"";$("txDreClass").value=t.dre_class||"receita";$("txMetalValue").value=t.metal_value||"";$("txInitialKg").value=t.initial_kg||"";$("txFinalKg").value=t.final_kg||"";
   const wrap=$("paymentParts");wrap.innerHTML="";const parts=Array.isArray(t.payment_parts)&&t.payment_parts.length?t.payment_parts:[{method:t.payment_method||'pix',amount:t.amount,card_id:t.card_id,installments:t.installment_total||1,fee_percent:t.fee_percent||0,rate_id:t.rate_id||null}];parts.forEach(addPaymentPart);updatePaymentParts();$("txForm button[type=submit]").textContent="Salvar alterações";
 }
-async function saveTx(e){
+async function saveTxCore(e){
  e.preventDefault();
  const total=+$('txAmount').value||0,status=$('txStatus').value,method=$('txMethod').value;
  if(total<=0)return msg("txMsg","Informe um valor maior que zero.");
@@ -465,7 +488,29 @@ async function saveTx(e){
      rows.push({...base,amount:part.amount,original_amount:part.amount,transaction_date:$('txPaidDate').value||$('txDate').value,competence_date:$('txDate').value,paid_date:$('txPaidDate').value||$('txDate').value,status:status==='parcial'?'pago':status,payment_method:part.method,card_id:part.card_id||null,rate_id:part.rate_id||null,fee_percent:part.fee_percent||0,payment_received_amount:part.amount,installment_number:1,installment_total:1,group_id:g});
    }
  }
- let r=await sb.from("transactions").insert(rows);msg("txMsg",r.error?.message||"Lançamento salvo.");if(!r.error){clearTxForm();await load()}
+ const dedupeKey=await sha256(JSON.stringify({user_id:user.uid,type:base.type,total,transaction_date:base.transaction_date,category_id:base.category_id,name:base.name,description:base.description,payment_method:method,status,payment_parts:parts.map(p=>({method:p.method,amount:+p.amount||0,card_id:p.card_id||null,installments:+p.installments||1,fee_percent:+p.fee_percent||0,rate_id:p.rate_id||null}))}));
+ const r=await api("save_transactions",{user_id:user.uid,dedupe_key:dedupeKey,rows});
+ if(r.error){msg("txMsg",r.error?.message||"Não foi possível salvar o lançamento.");return;}
+ if(r.duplicate){msg("txMsg","Este lançamento já foi salvo. A duplicidade foi bloqueada.");return;}
+ msg("txMsg","Lançamento salvo.");clearTxForm();await load()
+}
+let savingTx=false;
+async function saveTx(e){
+ e.preventDefault();
+ if(savingTx)return msg("txMsg","Salvamento já está em andamento. Aguarde.");
+ savingTx=true;
+ const btn=$("txForm")?.querySelector('button[type="submit"]');
+ const oldText=btn?.textContent;
+ if(btn){btn.disabled=true;btn.textContent="Salvando...";}
+ try{
+   await saveTxCore(e);
+ }catch(err){
+   console.error("Erro ao salvar lançamento",err);
+   msg("txMsg",friendlyError(err));
+ }finally{
+   savingTx=false;
+   if(btn){btn.disabled=false;btn.textContent=editingTxId?"Salvar alterações":(oldText||"Salvar lançamento");}
+ }
 }
 async function saveMachineRate(e){e.preventDefault();const name=$("rateName").value.trim();if(!name)return msg("rateMsg","Informe o nome da maquininha.");const r=await sb.from("machine_rates").insert({user_id:user.uid,name,credit_percent:+$("rateCredit").value||0,debit_percent:+$("rateDebit").value||0,pix_percent:+$("ratePix").value||0,active:true});msg("rateMsg",r.error?.message||"Taxa cadastrada.");if(!r.error){$("rateForm").reset();$("rateCredit").value=0;$("rateDebit").value=0;$("ratePix").value=0;await load()}}
 async function deleteMachineRate(id){if(!confirm("Excluir esta taxa?"))return;try{await deleteDoc(doc(null,"machine_rates",id));await load()}catch(err){msg("rateMsg",friendlyError(err))}}

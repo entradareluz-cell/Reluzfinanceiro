@@ -356,7 +356,7 @@ function doPost(e) {
     if(action==="setup") return out_(setupDatabase());
     if(action==="list") return out_({success:true,data:list_(p.sheet,p.user_id||"")});
     if(action==="get") return out_({success:true,data:find_(p.sheet,p.id)});
-    if(action==="create") return out_({success:true,data:create_(p.sheet,p.record||{})});
+    if(action==="save_transactions") return out_(Object.assign({success:true}, saveTransactions_(p.user_id||"", p.dedupe_key||"", p.rows||[])));\n    if(action==="create") return out_({success:true,data:create_(p.sheet,p.record||{})});
     if(action==="update") return out_({success:true,data:update_(p.sheet,p.id,p.record||{})});
     if(action==="upsert") return out_({success:true,data:upsert_(p.sheet,p.id,p.record||{})});
     if(action==="delete") return out_(delete_(p.sheet,p.id));
@@ -367,6 +367,51 @@ function doPost(e) {
     return out_({success:false,error:"Ação não reconhecida."});
   } catch(err) {
     return out_({success:false,error:String(err.message||err),stack:String(err.stack||"")});
+  }
+}
+
+
+function saveTransactions_(userId, dedupeKey, rows) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    const uid = String(userId || "").trim();
+    if (!uid) throw new Error("Usuário não informado.");
+    if (!Array.isArray(rows) || !rows.length) throw new Error("Nenhum lançamento informado.");
+    const key = String(dedupeKey || "").trim();
+    if (!key) throw new Error("Chave de segurança do lançamento não informada.");
+
+    // Idempotência: se o mesmo lançamento chegar novamente em poucos minutos,
+    // não grava outra cópia. Isso protege contra duplo clique, reenvio do
+    // navegador e repetição causada por redirecionamento do Apps Script.
+    const existing = list_(TABLES.LANCAMENTOS, uid);
+    const nowMs = Date.now();
+    const windowMs = 15 * 60 * 1000;
+    const duplicate = existing.find(r => {
+      if (String(r.dedupe_key || "") !== key) return false;
+      if (!r.created_at) return true;
+      try {
+        const t = Utilities.parseDate(String(r.created_at), CONFIG.TIMEZONE, "yyyy-MM-dd HH:mm:ss").getTime();
+        return (nowMs - t) <= windowMs;
+      } catch (_) {
+        return true;
+      }
+    });
+    if (duplicate) {
+      return {duplicate:true, id:duplicate.id, data:[duplicate]};
+    }
+
+    const created = [];
+    rows.forEach(row => {
+      const rec = Object.assign({}, row, {
+        user_id: uid,
+        dedupe_key: key
+      });
+      created.push(create_(TABLES.LANCAMENTOS, rec));
+    });
+    return {duplicate:false, data:created};
+  } finally {
+    lock.releaseLock();
   }
 }
 

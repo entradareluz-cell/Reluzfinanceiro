@@ -25,7 +25,7 @@
       <form id="loginForm" class="auth-form">
         <label>E-mail<input id="loginEmail" type="email" placeholder="voce@exemplo.com" autocomplete="email" required></label>
         <label>Senha<input id="loginPassword" type="password" placeholder="••••••••" autocomplete="current-password" required></label>
-        <button class="auth-primary" type="submit">Entrar na conta <span>→</span></button>
+        <button id="loginSubmit" class="auth-primary" type="submit"><span class="btn-label">Entrar na conta</span><span class="btn-arrow">→</span><span class="btn-spinner hidden" aria-hidden="true"></span></button>
       </form>
       <div class="auth-divider"><span>ou</span></div>
       <div class="signup-box">
@@ -34,7 +34,7 @@
           <label>Nome<input id="signupName" placeholder="Seu nome" autocomplete="name" required></label>
           <label>E-mail<input id="signupEmail" type="email" placeholder="voce@exemplo.com" autocomplete="email" required></label>
           <label>Senha<input id="signupPassword" type="password" placeholder="Mínimo de 6 caracteres" autocomplete="new-password" minlength="6" required></label>
-          <button class="secondary auth-secondary" type="submit">Criar minha conta</button>
+          <button id="signupSubmit" class="secondary auth-secondary" type="submit"><span class="btn-label">Criar minha conta</span><span class="btn-spinner hidden" aria-hidden="true"></span></button>
         </form>
       </div>
       <p id="authMsg" class="auth-msg"></p>
@@ -42,6 +42,14 @@
     </section>
   </div>
 </div>
+<div id="authLoading" class="auth-loading hidden" aria-live="polite" aria-busy="true">
+  <div class="auth-loading-card">
+    <div class="auth-loading-spinner" aria-hidden="true"></div>
+    <strong id="authLoadingTitle">Entrando na sua conta...</strong>
+    <span id="authLoadingText">Conectando ao Google Sheets e carregando seus dados.</span>
+  </div>
+</div>
+
 <div id="app" class="hidden"><header><div class="global-search"><input id="globalSearch" placeholder="🔎 Buscar em todo o financeiro..." autocomplete="off"><div id="searchResults" class="search-results hidden"></div></div><b>💰 Meu Financeiro</b><span><span id="userName"></span> <button id="logout" class="danger">Sair</button></span></header>
 <div class="layout"><nav>
 <button data-page="dashboard">📊 Dashboard</button><button data-page="empresarial">🏢 Empresarial</button><button data-page="calendario">🗓️ Calendário</button><button data-page="lancamentos">📝 Lançamentos</button><button data-page="categorias">🏷️ Categorias</button><button data-page="cartoes">💳 Cartões</button><button data-page="recorrentes">🔄 Recorrentes</button><button data-page="metas">🎯 Metas</button><button data-page="contas">🏦 Contas</button><button data-page="relatorios">📄 Relatórios</button></nav>
