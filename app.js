@@ -25,7 +25,18 @@ async function api(action,payload={}){
     options.headers={"Content-Type":"text/plain;charset=utf-8"};
     options.body=JSON.stringify({action,...payload});
   }
-  const res=await fetch(url,options);
+  const controller=new AbortController();
+  const timeout=setTimeout(()=>controller.abort(),12000);
+  options.signal=controller.signal;
+  let res;
+  try {
+    res=await fetch(url,options);
+  } catch(err) {
+    if(err?.name === "AbortError") throw new Error("Tempo esgotado ao conectar ao Google Apps Script. Verifique se a implantação da URL da API está como Web App e acessível.");
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
   const text=await res.text();
   let data;
   try{data=JSON.parse(text)}catch{throw new Error(text||"Resposta inválida do Apps Script.");}
@@ -251,7 +262,7 @@ async function load(){
   if(!user?.uid) return;
   // Toda consulta é filtrada pelo UID para manter os dados de cada usuário separados na planilha.
   const uid=user.uid;
-  let [a,b,c,d,e,f,g]=await Promise.all([
+  const results=await Promise.all([
     sb.from("categories").select("*").eq("user_id",uid),
     sb.from("accounts").select("*").eq("user_id",uid),
     sb.from("cards").select("*").eq("user_id",uid),
@@ -260,6 +271,7 @@ async function load(){
     sb.from("transactions").select("*,categories(name),accounts(name),cards(name)").eq("user_id",uid).limit(3000),
     sb.from("machine_rates").select("*").eq("user_id",uid)
   ]);
+  const [a,b,c,d,e,f,g]=results;
   const names=["categories","accounts","cards","recurring","goals","transactions","machine_rates"];
   [a,b,c,d,e,f].forEach((r,i)=>{if(r.error) console.error("Erro ao carregar "+names[i],r.error)});
   categories=await deduplicateCategories(a.data||[]);categories.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
@@ -588,7 +600,15 @@ async function saveTxCore(e){
      dedupe_key:dedupeKey
    });
  }else{
-   r=await api("save_transactions",{user_id:user.uid,dedupe_key:dedupeKey,rows});
+   // Lançamento simples: grava diretamente um registro.
+   // Não usa o fluxo de múltiplas parcelas, evitando que um lançamento
+   // novo seja tratado acidentalmente como edição.
+   const simpleRow = rows[0] || {...base, amount:target, original_amount:target};
+   r=await api("save_transaction",{
+     user_id:user.uid,
+     dedupe_key:dedupeKey,
+     record:simpleRow
+   });
  }
  if(r?.success===false){msg("txMsg",r.error||"Não foi possível salvar o lançamento.");return;}
  if(r?.duplicate){msg("txMsg","Este lançamento já foi salvo. A duplicidade foi bloqueada.");return;}

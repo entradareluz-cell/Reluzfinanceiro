@@ -65,6 +65,21 @@ function today_() {
   return Utilities.formatDate(new Date(), CONFIG.TIMEZONE, "yyyy-MM-dd");
 }
 
+function dateOnly_(value) {
+  if (value === null || value === undefined || value === "") return "";
+  if (Object.prototype.toString.call(value) === "[object Date]" && !isNaN(value.getTime())) {
+    return Utilities.formatDate(value, CONFIG.TIMEZONE, "yyyy-MM-dd");
+  }
+  const s=String(value).trim();
+  if (!s) return "";
+  let m=s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) return m[1]+"-"+("0"+m[2]).slice(-2)+"-"+("0"+m[3]).slice(-2);
+  m=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (m) return m[3]+"-"+("0"+m[2]).slice(-2)+"-"+("0"+m[1]).slice(-2);
+  const d=new Date(s);
+  return isNaN(d.getTime()) ? s : Utilities.formatDate(d, CONFIG.TIMEZONE, "yyyy-MM-dd");
+}
+
 function id_() {
   return Utilities.getUuid();
 }
@@ -588,6 +603,7 @@ function doPost(e) {
     if(action==="setup") return out_(setupDatabase());
     if(action==="list") return out_({success:true,data:list_(p.sheet,p.user_id||"")});
     if(action==="get") return out_({success:true,data:find_(p.sheet,p.id)});
+    if(action==="save_transaction") return out_({success:true, data:saveTransaction_(p.user_id||"", p.record||{}, p.dedupe_key||"")});
     if(action==="save_transactions") return out_(Object.assign({success:true}, saveTransactions_(p.user_id||"", p.dedupe_key||"", p.rows||[])));
     if(action==="save_multiple_payments") return out_(Object.assign({success:true}, saveMultiplePayments_(p.user_id||"", p.transaction||{}, p.payments||[], p.dedupe_key||"")));
     if(action==="create") return out_({success:true,data:create_(p.sheet,p.record||{})});
@@ -609,6 +625,51 @@ function doPost(e) {
   }
 }
 
+
+function saveTransaction_(userId, record, dedupeKey) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    const uid = normalizeEmail_(userId);
+    if (!uid) throw new Error("Usuário não informado.");
+
+    const rec = Object.assign({}, record || {});
+    delete rec.user_id;
+    rec.user_id = uid;
+    rec.amount = Number(rec.amount) || 0;
+    rec.original_amount = Number(rec.original_amount || rec.amount) || 0;
+    rec.payment_received_amount = Number(rec.payment_received_amount || 0) || 0;
+    rec.payment_fee_total = Number(rec.payment_fee_total || 0) || 0;
+    if (!rec.amount) throw new Error("Valor do lançamento deve ser maior que zero.");
+
+    if (rec.transaction_date) rec.transaction_date = dateOnly_(rec.transaction_date);
+    if (rec.competence_date) rec.competence_date = dateOnly_(rec.competence_date);
+    if (rec.paid_date) rec.paid_date = dateOnly_(rec.paid_date);
+
+    const key = String(dedupeKey || rec.dedupe_key || "").trim();
+    if (key) {
+      const existing = list_(TABLES.LANCAMENTOS, uid).find(r => String(r.dedupe_key || "") === key);
+      if (existing) return {duplicate:true, id:existing.id, data:[existing]};
+      rec.dedupe_key = key;
+    }
+
+    // Se vier um id, só atualiza se o registro realmente existir.
+    // Para lançamento novo, o id é sempre gerado pelo create_.
+    if (rec.id) {
+      const current = find_(TABLES.LANCAMENTOS, rec.id);
+      if (current) {
+        return {duplicate:false, data:updateTransaction_(uid, rec.id, rec)};
+      }
+      delete rec.id;
+    }
+
+    const created = create_(TABLES.LANCAMENTOS, rec);
+    audit_(uid, "create", TABLES.LANCAMENTOS, created.id, created);
+    return {duplicate:false, data:[created], id:created.id};
+  } finally {
+    lock.releaseLock();
+  }
+}
 
 function saveTransactions_(userId, dedupeKey, rows) {
   const lock = LockService.getScriptLock();
