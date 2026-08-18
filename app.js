@@ -161,33 +161,45 @@ document.addEventListener("DOMContentLoaded",async()=>{
 function loginView(){$("loginView").classList.remove("hidden");$("app").classList.add("hidden")}
 async function start(u){
   user=u;
-  setAuthLoading(true,"Preparando seu financeiro...","Login confirmado. Mantendo esta tela enquanto seus dados são carregados.");
+  setAuthLoading(true,"Login confirmado...","Mantendo a tela de login enquanto conectamos ao Google Sheets.");
 
   try{
-    setAuthLoading(true,"Conectando ao Google Sheets...","Buscando seu perfil e preparando sua sessão.");
-    const r=await getDoc(doc(null,"users",u.uid));
-    $("userName").textContent=r.exists()?r.data().name:(u.displayName||u.email);
+    // O usuário já veio autenticado do Apps Script. Não fazemos uma segunda
+    // consulta obrigatória em USUARIOS, pois ela podia bloquear a entrada.
+    $("userName").textContent=String(
+      u?.displayName || u?.name || u?.email || "Usuário"
+    );
 
-    setAuthLoading(true,"Carregando seus dados...","Categorias, contas, cartões, metas e lançamentos.");
+    setAuthLoading(true,"Conectando ao Google Sheets...","Validando a sessão e preparando seus dados.");
+
+    // Carregamento principal. A função load foi preparada para tolerar falhas
+    // de tabelas opcionais sem impedir a abertura do sistema.
     await load();
 
-    setAuthLoading(true,"Finalizando...","Organizando o dashboard e preparando sua experiência.");
-    page("dashboard");
+    setAuthLoading(true,"Finalizando...","Dashboard pronto. Abrindo seu financeiro...");
 
-    // Pequena pausa para a transição visual não parecer uma troca seca.
-    await new Promise(resolve=>setTimeout(resolve,220));
+    // Renderiza o dashboard antes de esconder o login.
+    try{ page("dashboard"); }catch(err){ console.warn("Falha ao selecionar dashboard:",err); }
+
+    await new Promise(resolve=>setTimeout(resolve,120));
 
     $("app").classList.remove("hidden");
     $("app").classList.add("app-ready");
-    $("loginView").classList.add("auth-exit");
 
+    // Transição suave, sem troca seca.
+    $("loginView").classList.add("auth-exit");
     await new Promise(resolve=>setTimeout(resolve,420));
 
     $("loginView").classList.add("hidden");
     $("loginView").classList.remove("auth-exit");
     setAuthLoading(false);
+    window.__reluzLoaded=true;
   }catch(err){
+    console.error("RELUZ: falha ao iniciar sessão:",err);
     setAuthLoading(false);
+    $("app")?.classList.add("hidden");
+    $("loginView")?.classList.remove("hidden");
+    msg("authMsg","Entrou, mas não foi possível carregar os dados. Verifique a conexão com o Google Sheets.");
     throw err;
   }
 }
@@ -269,44 +281,82 @@ async function deduplicateCategories(rows){
 }
 
 async function load(){
-  if(!user?.uid) return;
-  // Toda consulta é filtrada pelo UID para manter os dados de cada usuário separados na planilha.
-  const uid=user.uid;
-  let [a,b,c,d,e,f,g]=await Promise.all([
-    sb.from("categories").select("*").eq("user_id",uid),
-    sb.from("accounts").select("*").eq("user_id",uid),
-    sb.from("cards").select("*").eq("user_id",uid),
-    sb.from("recurring").select("*,categories(name)").eq("user_id",uid),
-    sb.from("goals").select("*").eq("user_id",uid),
-    sb.from("transactions").select("*,categories(name),accounts(name),cards(name)").eq("user_id",uid).limit(3000),
-    sb.from("machine_rates").select("*").eq("user_id",uid)
-  ]);
-  const names=["categories","accounts","cards","recurring","goals","transactions","machine_rates"];
-  [a,b,c,d,e,f].forEach((r,i)=>{if(r.error) console.error("Erro ao carregar "+names[i],r.error)});
-  categories=await deduplicateCategories(a.data||[]);categories.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
+  if(!user?.uid) throw new Error("Sessão sem usuário.");
+
+  const uid=String(user.uid);
+  const request=(sheet, extra={})=>api("list",{sheet:sheetName(sheet),...extra});
+
+  const jobs=[
+    ["categories","CATEGORIAS"],
+    ["accounts","CONTAS"],
+    ["cards","CARTOES"],
+    ["recurring","RECORRENTES"],
+    ["goals","METAS"],
+    ["transactions","LANCAMENTOS"],
+    ["machine_rates","TAXAS"]
+  ];
+
+  const results=await Promise.all(jobs.map(async ([key,sheet])=>{
+    try{
+      const r=await request(sheet);
+      let data=Array.isArray(r.data)?r.data:[];
+      // O filtro por usuário é feito no cliente porque o Apps Script já
+      // devolve as linhas da planilha.
+      if(data.some(x=>Object.prototype.hasOwnProperty.call(x,"user_id"))){
+        data=data.filter(x=>String(x.user_id||"")===uid);
+      }
+      return {key,data,error:null};
+    }catch(error){
+      console.error(`Erro ao carregar ${key}:`,error);
+      return {key,data:[],error};
+    }
+  }));
+
+  const by=key=>results.find(x=>x.key===key)||{data:[],error:null};
+
+  categories=(by("categories").data||[]);
+  categories=await deduplicateCategories(categories);
+  categories.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||""),"pt-BR"));
   categoriesCache=categories;
-  accounts=(b.data||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
+
+  accounts=(by("accounts").data||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||""),"pt-BR"));
   accountsCache=accounts;
-  cards=(c.data||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
+
+  cards=(by("cards").data||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||""),"pt-BR"));
   cardsCache=cards;
+
+  // Se ainda não houver categorias, cria as padrão. Erro aqui não impede
+  // o restante do sistema de abrir.
   if(!categories.length){
-    const defaults=[['Salário','entrada'],['Extra','entrada'],['Reembolso','entrada'],['Outros recebimentos','entrada'],['Casa','saida'],['Mercado','saida'],['Alimentação','saida'],['Carro','saida'],['Combustível','saida'],['Contas','saida'],['Celular/Internet','saida'],['Cartão','saida'],['Lazer','saida'],['Compras','saida'],['Pets','saida'],['Família','saida'],['Investimentos','saida'],['Outros','saida']];
-    const seed=await sb.from("categories").insert(defaults.map(([name,type])=>({user_id:uid,name,type})));
-    if(seed.error) console.error("Erro ao criar categorias padrão",seed.error);
-    else {
-      const fresh=await sb.from("categories").select("*").eq("user_id",uid);
-      categories=await deduplicateCategories(fresh.data||[]);categories.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
+    try{
+      const seed=await api("create",{sheet:"CATEGORIAS",record:{
+        user_id:uid,name:"Outros",type:"saida",active:true
+      }});
+      if(seed.data) categories=[seed.data];
       categoriesCache=categories;
+    }catch(error){
+      console.warn("Não foi possível criar categoria padrão:",error);
     }
   }
-  recurring=d.data||[];
-  goalsList=e.data||[];
-  txs=f.data||[];
-  machineRates=(g.data||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
+
+  recurring=by("recurring").data||[];
+  goalsList=by("goals").data||[];
+  txs=by("transactions").data||[];
+  machineRates=(by("machine_rates").data||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||""),"pt-BR"));
+
   txs.sort((x,y)=>String(y.transaction_date||"").localeCompare(String(x.transaction_date||"")));
   txs.forEach(t=>joinRelations("transactions",t));
   recurring.forEach(r=>joinRelations("recurring",r));
-  fill();render();window.__reluzLoaded=true
+
+  // Preenche a interface mesmo que alguma tabela opcional esteja vazia.
+  fill();
+  render();
+  window.__reluzLoaded=true;
+
+  const failed=results.filter(x=>x.error).map(x=>x.key);
+  if(failed.length){
+    console.warn("RELUZ abriu com tabelas que não puderam ser carregadas:",failed);
+  }
 }
 function fill(){
   fillCategorySelects();
