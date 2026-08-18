@@ -535,7 +535,54 @@ function render(){
   $("recBody").innerHTML=recurring.map(r=>`<tr><td>${esc(r.description)}</td><td>${money(r.amount)}</td><td>${esc(r.categories?.name||"-")}</td><td>${r.due_day}</td><td>${r.start_date}</td><td>${r.end_date||"-"}</td></tr>`).join("");
   $("goals").innerHTML=goalsData();$("accountBody").innerHTML=accounts.map(a=>{let m=txs.filter(t=>t.account_id===a.id).reduce((s,t)=>s+(t.type==="entrada"?1:-1)*+t.amount,0);return`<tr><td>${esc(a.name)}</td><td>${esc(a.type)}</td><td>${money(a.initial_balance)}</td><td>${money(m)}</td><td>${money(+a.initial_balance+m)}</td></tr>`}).join("");dashboard();report();
 }
-function dashboard(){let m=$("dashMonth").value||thisMonth,r=txs.filter(t=>t.transaction_date.startsWith(m)),ins=r.filter(t=>t.type==="entrada").reduce((s,t)=>s+ +t.amount,0),out=r.filter(t=>t.type==="saida").reduce((s,t)=>s+ +t.amount,0),pending=txs.filter(t=>t.type==="saida"&&t.status==="pendente"&&t.transaction_date>=today).reduce((s,t)=>s+ +t.amount,0);$("inTotal").textContent=money(ins);$("outTotal").textContent=money(out);$("result").textContent=money(ins-out);$("available").textContent=money(ins-out-pending);let daily={};r.forEach(t=>daily[t.transaction_date]=(daily[t.transaction_date]||0)+(t.type==="entrada"?+t.amount:-+t.amount));let cc={};r.filter(t=>t.type==="saida").forEach(t=>cc[t.categories?.name||"Outros"]=(cc[t.categories?.name||"Outros"]||0)+ +t.amount);flowChart?.destroy();catChart?.destroy();flowChart=new Chart($("flow"),{type:"line",data:{labels:Object.keys(daily),datasets:[{label:"Resultado",data:Object.values(daily)}]}});catChart=new Chart($("cats"),{type:"doughnut",data:{labels:Object.keys(cc),datasets:[{data:Object.values(cc)}]}});$("due").innerHTML=txs.filter(t=>t.type==="saida"&&t.status==="pendente").slice(0,5).map(t=>`<p>${t.transaction_date} · ${esc(t.description)}<br><b>${money(t.amount)}</b></p>`).join("")||"Nenhuma.";$("cardDash").innerHTML=cards.map(c=>`<p>${esc(c.name)} · ${money(txs.filter(t=>t.card_id===c.id&&t.type==="saida"&&t.transaction_date.startsWith(m)).reduce((s,t)=>s+ +t.amount,0))}</p>`).join("")||"Nenhum.";$("goalDash").innerHTML=goalsList.slice(0,5).map(g=>`<p>${esc(g.name)} · ${(g.current_amount/g.target_amount*100).toFixed(0)}%</p>`).join("")||"Nenhuma."}
+function dashboard(){
+  const m=$("dashMonth").value||thisMonth;
+  const r=txs.filter(t=>String(t.transaction_date||"").slice(0,7)===m);
+  const num=v=>Number(v)||0;
+  const ins=r.filter(t=>t.type==="entrada").reduce((s,t)=>s+num(t.original_amount??t.amount),0);
+  const out=r.filter(t=>t.type==="saida").reduce((s,t)=>s+num(t.amount),0);
+  const pending=txs.filter(t=>t.type==="saida"&&t.status!=="pago"&&String(t.transaction_date||"")>=today).reduce((s,t)=>s+num(t.amount),0);
+  const receivable=txs.filter(t=>t.type==="entrada"&&t.status!=="pago").reduce((s,t)=>s+num(t.amount),0);
+  const invoice=txs.filter(t=>t.type==="saida"&&t.card_id&&String(t.transaction_date||"").slice(0,7)===m).reduce((s,t)=>s+num(t.amount),0);
+  const result=ins-out;
+  $("inTotal").textContent=money(ins);$("outTotal").textContent=money(out);$("result").textContent=money(result);$("available").textContent=money(result-pending);
+  $("payableTotal").textContent=money(pending);$("receivableTotal").textContent=money(receivable);$("invoiceTotal").textContent=money(invoice);
+
+  const prevDate=new Date(`${m}-01T12:00:00`);prevDate.setMonth(prevDate.getMonth()-1);const pm=prevDate.toISOString().slice(0,7);
+  const prev=txs.filter(t=>String(t.transaction_date||"").slice(0,7)===pm);
+  const prevResult=prev.filter(t=>t.type==="entrada").reduce((s,t)=>s+num(t.original_amount??t.amount),0)-prev.filter(t=>t.type==="saida").reduce((s,t)=>s+num(t.amount),0);
+  const variation=prevResult===0?(result===0?0:100):((result-prevResult)/Math.abs(prevResult))*100;
+  $("monthCompare").textContent=`${variation>=0?"+":""}${variation.toFixed(1)}%`;
+
+  const days=new Date(prevDate.getFullYear(),prevDate.getMonth()+2,0).getDate();
+  const labels=[],entries=[],expenses=[],results=[];
+  for(let d=1;d<=days;d++){
+    const day=String(d).padStart(2,"0"), key=`${m}-${day}`;labels.push(day);
+    const dayRows=r.filter(t=>String(t.transaction_date||"").slice(0,10)===key);
+    const ei=dayRows.filter(t=>t.type==="entrada").reduce((s,t)=>s+num(t.original_amount??t.amount),0);
+    const eo=dayRows.filter(t=>t.type==="saida").reduce((s,t)=>s+num(t.amount),0);
+    entries.push(ei);expenses.push(eo);results.push(ei-eo);
+  }
+  const cc={};r.filter(t=>t.type==="saida").forEach(t=>{const n=t.categories?.name||t.category_name||"Sem categoria";cc[n]=(cc[n]||0)+num(t.amount)});
+  const catEntries=Object.entries(cc).sort((a,b)=>b[1]-a[1]).slice(0,8);
+  flowChart?.destroy();catChart?.destroy();
+  const flow=$('flow');const cats=$('cats');
+  if(flow)flowChart=new Chart(flow,{type:'line',data:{labels,datasets:[
+    {label:'Entradas',data:entries,borderWidth:2,tension:.35,pointRadius:2,fill:false},
+    {label:'Saídas',data:expenses,borderWidth:2,tension:.35,pointRadius:2,fill:false},
+    {label:'Resultado',data:results,borderWidth:3,tension:.35,pointRadius:1,fill:false}
+  ]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},plugins:{legend:{position:'bottom'},tooltip:{callbacks:{label:c=>`${c.dataset.label}: ${money(c.raw)}`}}},scales:{y:{ticks:{callback:v=>money(v)}},x:{grid:{display:false}}}}});
+  if(cats)catChart=new Chart(cats,{type:'bar',data:{labels:catEntries.map(x=>x[0]),datasets:[{label:'Gastos',data:catEntries.map(x=>x[1]),borderRadius:7}]},options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>money(c.raw)}}},scales:{x:{ticks:{callback:v=>money(v)}},y:{grid:{display:false}}}}});
+  $("due").innerHTML=txs.filter(t=>t.type==="saida"&&t.status!=="pago").sort((a,b)=>String(a.transaction_date).localeCompare(String(b.transaction_date))).slice(0,6).map(t=>`<div class="dash-list-row"><div><b>${esc(t.name||t.description||"Sem descrição")}</b><small>${t.transaction_date} · ${esc(t.categories?.name||t.category_name||"Sem categoria")}</small></div><strong>${money(t.amount)}</strong></div>`).join("")||'<div class="dash-empty">Nenhuma conta pendente.</div>';
+  $("cardDash").innerHTML=cards.map(c=>{const used=txs.filter(t=>t.card_id===c.id&&t.type==="saida"&&String(t.transaction_date||"").slice(0,7)===m).reduce((s,t)=>s+num(t.amount),0);const pct=c.limit_amount?Math.min(100,used/num(c.limit_amount)*100):0;return`<div class="dash-card-row"><div><b>${esc(c.name)}</b><small>${money(used)} de ${money(c.limit_amount)}</small></div><div class="dash-mini-progress"><span style="width:${pct}%"></span></div></div>`}).join("")||'<div class="dash-empty">Nenhum cartão cadastrado.</div>';
+  $("goalDash").innerHTML=goalsList.slice(0,5).map(g=>{const pct=num(g.target_amount)?Math.min(100,num(g.current_amount)/num(g.target_amount)*100):0;return`<div class="dash-goal-row"><div><b>${esc(g.name)}</b><small>${money(g.current_amount)} de ${money(g.target_amount)}</small></div><strong>${pct.toFixed(0)}%</strong></div>`}).join("")||'<div class="dash-empty">Nenhuma meta cadastrada.</div>';
+  const forecast=txs.filter(t=>String(t.transaction_date||"")>=today&&String(t.transaction_date||"")<=new Date(Date.now()+30*86400000).toISOString().slice(0,10));
+  $("forecast30").textContent=money(forecast.reduce((s,t)=>s+(t.type==='entrada'?1:-1)*num(t.amount),0));
+  const f60=txs.filter(t=>String(t.transaction_date||"")>=today&&String(t.transaction_date||"")<=new Date(Date.now()+60*86400000).toISOString().slice(0,10));
+  const f90=txs.filter(t=>String(t.transaction_date||"")>=today&&String(t.transaction_date||"")<=new Date(Date.now()+90*86400000).toISOString().slice(0,10));
+  $("forecast60").textContent=money(f60.reduce((s,t)=>s+(t.type==='entrada'?1:-1)*num(t.amount),0));$("forecast90").textContent=money(f90.reduce((s,t)=>s+(t.type==='entrada'?1:-1)*num(t.amount),0));
+}
+
 function report(){
   const m=$("reportMonth").value||thisMonth,r=txs.filter(t=>String(t.transaction_date||"").startsWith(m));
   const i=r.filter(t=>t.type==="entrada").reduce((s,t)=>s+ +(t.original_amount??t.amount),0),o=r.filter(t=>t.type==="saida").reduce((s,t)=>s+ +t.amount,0);
@@ -636,7 +683,39 @@ function advRenderCards(){
  const dash=$("cardDash");if(dash)dash.innerHTML=cards.map(c=>{const used=advCardUsage(c.id);return `<p><b>${esc(c.name)}</b> · ${money(used)} / ${money(c.limit_amount)}<br><small>Disponível: ${money(Math.max(0,advNum(c.limit_amount)-used))} · Fechamento ${c.closing_day||"—"} · Vencimento ${c.due_day||"—"}</small></p>`}).join("")||"Nenhum cartão.";
 }
 function advCalendar(){
- const el=$("calendarGrid");if(!el)return;const month=$("calendarMonth").value||thisMonth;const [y,m]=month.split("-").map(Number),first=new Date(y,m-1,1),last=new Date(y,m,0),start=(first.getDay()+6)%7,days=last.getDate();let html="<div class='cal-head'>"+["Seg","Ter","Qua","Qui","Sex","Sáb","Dom"].map(x=>`<b>${x}</b>`).join("")+"</div><div class='cal-body'>";for(let i=0;i<start;i++)html+="<div class='cal-day empty-day'></div>";for(let d=1;d<=days;d++){const ds=`${y}-${String(m).padStart(2,"0")}-${String(d).padStart(2,"0")}`,items=txs.filter(t=>t.transaction_date===ds),hasIn=items.some(advTypeIncome),hasOut=items.some(advTypeExpense),hasCard=items.some(t=>t.card_id);html+=`<div class='cal-day'><span>${d}</span><div>${hasIn?"<i class='income-dot'>●</i>":""}${hasOut?"<i class='expense-dot'>●</i>":""}${hasOut&&!items.every(advStatusPaid)?"<i class='due-dot'>●</i>":""}${hasCard?"<i class='invoice-dot'>●</i>":""}</div>${items.slice(0,2).map(t=>`<small>${esc(t.name||t.description||"")} · ${money(t.amount)}</small>`).join("")}</div>`}html+="</div>";el.innerHTML=html;
+ const el=$("calendarGrid");
+ if(!el)return;
+ const month=$("calendarMonth").value||thisMonth;
+ const [y,m]=month.split("-").map(Number);
+ const first=new Date(y,m-1,1),last=new Date(y,m,0);
+ const start=(first.getDay()+6)%7,days=last.getDate();
+ const normalizeDate=v=>{
+   if(v===null||v===undefined||v==="")return "";
+   const s=String(v).trim();
+   let mt=s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+   if(mt)return `${mt[1]}-${mt[2]}-${mt[3]}`;
+   mt=s.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+   if(mt)return `${mt[3]}-${mt[2]}-${mt[1]}`;
+   const d=new Date(s);
+   if(!Number.isNaN(d.getTime()))return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+   return s.slice(0,10);
+ };
+ const txDate=t=>normalizeDate(t.transaction_date||t.competence_date||t.paid_date);
+ const itemsByDay={};
+ txs.forEach(t=>{const ds=txDate(t);if(!ds)return;(itemsByDay[ds]??=[]).push(t)});
+ let html="<div class='cal-head'>"+["Seg","Ter","Qua","Qui","Sex","Sáb","Dom"].map(x=>`<b>${x}</b>`).join("")+"</div><div class='cal-body'>";
+ for(let i=0;i<start;i++)html+="<div class='cal-day empty-day'></div>";
+ for(let d=1;d<=days;d++){
+   const ds=`${y}-${String(m).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+   const items=itemsByDay[ds]||[];
+   const hasIn=items.some(advTypeIncome),hasOut=items.some(advTypeExpense),hasCard=items.some(t=>t.card_id);
+   const totalIn=items.filter(advTypeIncome).reduce((s,t)=>s+advNum(t.amount),0);
+   const totalOut=items.filter(advTypeExpense).reduce((s,t)=>s+advNum(t.amount),0);
+   const pendingOut=items.some(t=>advTypeExpense(t)&&!advStatusPaid(t));
+   html+=`<div class='cal-day${ds===today?" today": ""}'><span>${d}</span><div>${hasIn?"<i class='income-dot' title='Recebimento'>●</i>":""}${hasOut?"<i class='expense-dot' title='Pagamento'>●</i>":""}${pendingOut?"<i class='due-dot' title='Vencimento pendente'>●</i>":""}${hasCard?"<i class='invoice-dot' title='Cartão'>●</i>":""}</div>${totalIn?`<small class='income-dot'>+ ${money(totalIn)}</small>`:""}${totalOut?`<small class='expense-dot'>− ${money(totalOut)}</small>`:""}${items.slice(0,2).map(t=>`<small>${esc(t.name||t.description||"Sem nome")} · ${money(t.amount)}</small>`).join("")}${items.length>2?`<small>+ ${items.length-2} lançamento(s)</small>`:""}</div>`;
+ }
+ html+="</div>";
+ el.innerHTML=html;
 }
 function advGlobalSearch(q){
  const box=$("searchResults");if(!box)return;if(!q||q.length<2){box.classList.add("hidden");return}q=q.toLowerCase();const results=[];txs.forEach(t=>{const hay=`${t.name||""} ${t.description||""} ${t.notes||""} ${t.subcategory||""} ${advCategory(t)} ${advAccount(t)} ${advCard(t)}`.toLowerCase();if(hay.includes(q))results.push({type:"Lançamento",title:t.name||t.description||"Sem nome",meta:`${t.transaction_date} · ${money(t.amount)} · ${advCategory(t)}`})});categories.forEach(c=>{if(c.name.toLowerCase().includes(q))results.push({type:"Categoria",title:c.name,meta:c.type})});accounts.forEach(a=>{if(a.name.toLowerCase().includes(q))results.push({type:"Conta",title:a.name,meta:money(a.initial_balance)})});cards.forEach(c=>{if(c.name.toLowerCase().includes(q))results.push({type:"Cartão",title:c.name,meta:`Limite ${money(c.limit_amount)}`})});box.innerHTML=results.slice(0,12).map(r=>`<div class='search-item'><b>${esc(r.title)}</b><small>${esc(r.type)} · ${esc(r.meta)}</small></div>`).join("")||"<div class='search-item'>Nenhum resultado.</div>";box.classList.remove("hidden");}
