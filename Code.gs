@@ -4,7 +4,7 @@
  * Google Sheets + Google Apps Script API
  *
  * A planilha é o banco de dados.
- * O Firebase Authentication continua sendo usado somente para login.
+ * A autenticação também é feita pelo Google Apps Script + aba USUARIOS.
  */
 
 const CONFIG = {
