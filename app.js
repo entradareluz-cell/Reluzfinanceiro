@@ -461,6 +461,7 @@ async function editTx(id){
   $("txAmount").value=t.original_amount??t.amount??0;$("txDate").value=t.competence_date||t.transaction_date||today;$("txPaidDate").value=t.paid_date||"";$("txSubcategory").value=t.subcategory||"";$("txAccount").value=t.account_id||"";$("txCard").value=t.card_id||"";$("txMethod").value=t.payment_method||"pix";$("txStatus").value=t.status||"pago";$("txName").value=t.name||"";$("txDesc").value=t.description||"";$("txInstall").value=t.installment_total||1;$("txPaidAmount").value=t.payment_received_amount||t.amount||"";$("txNotes").value=t.notes||"";$("txDreClass").value=t.dre_class||"receita";$("txMetalValue").value=t.metal_value||"";$("txInitialKg").value=t.initial_kg||"";$("txFinalKg").value=t.final_kg||"";
   const wrap=$("paymentParts");wrap.innerHTML="";let savedParts=t.payment_parts;if(typeof savedParts==='string'){try{savedParts=JSON.parse(savedParts)}catch(_){savedParts=null}};const parts=Array.isArray(savedParts)&&savedParts.length?savedParts:[{method:t.payment_method||'pix',amount:t.amount,card_id:t.card_id,installments:t.installment_total||1,fee_percent:t.fee_percent||0,rate_id:t.rate_id||null}];parts.forEach(addPaymentPart);updatePaymentParts();$("txForm button[type=submit]").textContent="Salvar alterações";
 }
+window.editTx = editTx;
 async function saveTxCore(e){
  e.preventDefault();
  const total=+$('txAmount').value||0,status=$('txStatus').value,method=$('txMethod').value;
