@@ -52,6 +52,14 @@
   </div>
 </div>
 
+<div id="editTxModal" class="edit-tx-modal hidden" aria-hidden="true">
+  <div class="edit-tx-backdrop" data-close-edit></div>
+  <div class="edit-tx-dialog" role="dialog" aria-modal="true" aria-labelledby="editTxTitle">
+    <div class="edit-tx-header"><div><span class="eyebrow">EDIÇÃO</span><h2 id="editTxTitle">Editar lançamento</h2><p>Os dados abaixo são os dados reais do lançamento selecionado.</p></div><button type="button" class="secondary small-btn" data-close-edit>Fechar</button></div>
+    <div id="editTxHost"></div>
+  </div>
+</div>
+
 <div id="app" class="hidden"><header><div class="global-search"><input id="globalSearch" placeholder="🔎 Buscar em todo o financeiro..." autocomplete="off"><div id="searchResults" class="search-results hidden"></div></div><b>💰 Meu Financeiro</b><span><span id="userName"></span> <button id="logout" class="danger">Sair</button></span></header>
 <div class="layout"><nav>
 <button data-page="dashboard">📊 Dashboard</button><button data-page="empresarial">🏢 Empresarial</button><button data-page="calendario">🗓️ Calendário</button><button data-page="lancamentos">📝 Lançamentos</button><button data-page="categorias">🏷️ Categorias</button><button data-page="cartoes">💳 Cartões</button><button data-page="recorrentes">🔄 Recorrentes</button><button data-page="metas">🎯 Metas</button><button data-page="contas">🏦 Contas</button><button data-page="relatorios">📄 Relatórios</button></nav>

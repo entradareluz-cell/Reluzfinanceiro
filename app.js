@@ -150,6 +150,8 @@ document.addEventListener("DOMContentLoaded",async()=>{
   $("loginForm").onsubmit=login;$("signupForm").onsubmit=signup;$("logout").onclick=()=>sb.auth.signOut();
   $("txForm").onsubmit=saveTx;$("catForm").onsubmit=saveCategory;$("cardForm").onsubmit=saveCard;$("rateForm").onsubmit=saveMachineRate;$("recForm").onsubmit=saveRec;$("goalForm").onsubmit=saveGoal;$("accountForm").onsubmit=saveAccount;$("txType").onchange=fillCategorySelects;$("txCat").addEventListener("change",updateMetalFields);$("recType")?.addEventListener("change",fillCategorySelects);
   initPaymentBreakdown();
+  document.querySelectorAll('[data-close-edit]').forEach(el=>el.addEventListener('click',()=>{closeEditTxModal();clearTxForm();}));
+  document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$("editTxModal")?.classList.contains('hidden')){closeEditTxModal();clearTxForm();}});
   $("dashMonth").onchange=dashboard;$("reportMonth").onchange=report;$("transferForm")?.addEventListener("submit",saveTransfer);$("excel").onclick=excel;$("pdf").onclick=pdf;
   document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>page(b.dataset.page));
   try{
@@ -453,15 +455,81 @@ function initPaymentBreakdown(){
   updatePaymentParts();
 }
 function collectPaymentParts(){return [...document.querySelectorAll('#paymentParts .payment-part')].map(p=>({method:p.querySelector('.part-method').value,amount:+p.querySelector('.part-amount').value||0,card_id:p.querySelector('.part-card')?.value||null,rate_id:p.querySelector('.part-rate')?.value||null,installments:+p.querySelector('.part-install')?.value||1,fee_percent:+p.querySelector('.part-fee')?.value||0})).filter(x=>x.amount>0)}
-function clearTxForm(){editingTxId=null;$("txForm")?.reset();$("txDate").value=today;$("txPaidDate").value="";$("txPaidAmount").value="";$("txMetalValue").value="";$("txInitialKg").value="";$("txFinalKg").value="";const submitBtn=$("txForm button[type=submit]");if(submitBtn)submitBtn.textContent="Salvar lançamento";$("txMsg").textContent="";initPaymentBreakdown();updateMetalFields();}
-async function editTx(id){
-  const t=txs.find(x=>x.id===id);if(!t)return;
-  editingTxId=id;page('lancamentos');
-  $("txType").value=t.type;fillCategorySelects();$("txCat").value=t.category_id||"";updateMetalFields();
-  $("txAmount").value=t.original_amount??t.amount??0;$("txDate").value=t.competence_date||t.transaction_date||today;$("txPaidDate").value=t.paid_date||"";$("txSubcategory").value=t.subcategory||"";$("txAccount").value=t.account_id||"";$("txCard").value=t.card_id||"";$("txMethod").value=t.payment_method||"pix";$("txStatus").value=t.status||"pago";$("txName").value=t.name||"";$("txDesc").value=t.description||"";$("txInstall").value=t.installment_total||1;$("txPaidAmount").value=t.payment_received_amount||t.amount||"";$("txNotes").value=t.notes||"";$("txDreClass").value=t.dre_class||"receita";$("txMetalValue").value=t.metal_value||"";$("txInitialKg").value=t.initial_kg||"";$("txFinalKg").value=t.final_kg||"";
-  const wrap=$("paymentParts");wrap.innerHTML="";let savedParts=t.payment_parts;if(typeof savedParts==='string'){try{savedParts=JSON.parse(savedParts)}catch(_){savedParts=null}};const parts=Array.isArray(savedParts)&&savedParts.length?savedParts:[{method:t.payment_method||'pix',amount:t.amount,card_id:t.card_id,installments:t.installment_total||1,fee_percent:t.fee_percent||0,rate_id:t.rate_id||null}];parts.forEach(addPaymentPart);updatePaymentParts();$("txForm button[type=submit]").textContent="Salvar alterações";
+function normalizeDateInput(value){
+  if(!value) return "";
+  if(value instanceof Date && !isNaN(value.getTime())) return value.toISOString().slice(0,10);
+  const v=String(value).trim();
+  if(/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+  const iso=v.match(/^(\d{4}-\d{2}-\d{2})/); if(iso)return iso[1];
+  const br=v.match(/^(\d{2})[\/-](\d{2})[\/-](\d{4})$/); if(br)return `${br[3]}-${br[2]}-${br[1]}`;
+  const d=new Date(v); return isNaN(d.getTime())?"":d.toISOString().slice(0,10);
 }
-window.editTx = editTx;
+function setSelectValue(id,value, fallback=""){
+  const el=$(id); if(!el)return;
+  const v=value==null?fallback:String(value);
+  if(v && ![...el.options].some(o=>String(o.value)===v)){
+    const opt=document.createElement('option'); opt.value=v; opt.textContent=`Selecionado (${v})`; el.appendChild(opt);
+  }
+  el.value=v;
+}
+function openEditTxModal(){
+  const modal=$("editTxModal"),host=$("editTxHost"),form=$("txForm");
+  if(!modal||!host||!form)return;
+  if(!$("txFormPlaceholder")){const ph=document.createElement('div');ph.id="txFormPlaceholder";form.parentNode.insertBefore(ph,form);}
+  host.appendChild(form);
+  modal.classList.remove('hidden');modal.setAttribute('aria-hidden','false');document.body.classList.add('edit-modal-open');
+}
+function closeEditTxModal(){
+  const modal=$("editTxModal"),host=$("editTxHost"),form=$("txForm"),ph=$("txFormPlaceholder");
+  if(ph&&form) ph.parentNode.insertBefore(form,ph.nextSibling);
+  if(host) host.innerHTML="";
+  if(modal){modal.classList.add('hidden');modal.setAttribute('aria-hidden','true');}
+  document.body.classList.remove('edit-modal-open');
+  editingTxId=null;
+}
+function clearTxForm(){
+  const wasEditing=!!editingTxId;
+  if(wasEditing) closeEditTxModal();
+  editingTxId=null;$('txForm')?.reset();$("txDate").value=today;$('txPaidDate').value="";$('txPaidAmount').value="";$('txMetalValue').value="";$('txInitialKg').value="";$('txFinalKg').value="";
+  const submitBtn=$("txForm button[type=submit]");if(submitBtn)submitBtn.textContent="Salvar lançamento";$("txMsg").textContent="";initPaymentBreakdown();updateMetalFields();
+}
+async function editTx(id){
+  const t=txs.find(x=>String(x.id)===String(id)); if(!t)return msg("txMsg","Lançamento não encontrado.");
+  editingTxId=String(id); page('lancamentos');
+  // O modal usa o mesmo formulário completo, mas isolado da tela de novo lançamento.
+  openEditTxModal();
+  setSelectValue("txType",t.type||"saida");
+  fillCategorySelects();
+  setSelectValue("txCat",t.category_id||"");
+  setSelectValue("txAccount",t.account_id||"");
+  setSelectValue("txCard",t.card_id||"");
+  $("txAmount").value=t.original_amount!==undefined&&t.original_amount!==null&&t.original_amount!==""?Number(t.original_amount):Number(t.amount||0);
+  $("txDate").value=normalizeDateInput(t.competence_date||t.transaction_date||"")||today;
+  $("txPaidDate").value=normalizeDateInput(t.paid_date||"");
+  $("txSubcategory").value=t.subcategory||"";
+  $("txName").value=t.name||"";
+  $("txDesc").value=t.description||"";
+  $("txNotes").value=t.notes||"";
+  $("txStatus").value=t.status||"pago";
+  $("txDreClass").value=t.dre_class||($("txType").value==='entrada'?"receita":"despesa_operacional");
+  $("txRecurring").value=t.recurrence||"none";
+  $("txInstall").value=Number(t.installment_total||1);
+  $("txPaidAmount").value=t.payment_received_amount!==undefined&&t.payment_received_amount!==null&&t.payment_received_amount!==""?Number(t.payment_received_amount):Number(t.amount||0);
+  $("txMetalValue").value=t.metal_value!==undefined&&t.metal_value!==null&&t.metal_value!==""?Number(t.metal_value):"";
+  $("txInitialKg").value=t.initial_kg!==undefined&&t.initial_kg!==null&&t.initial_kg!==""?Number(t.initial_kg):"";
+  $("txFinalKg").value=t.final_kg!==undefined&&t.final_kg!==null&&t.final_kg!==""?Number(t.final_kg):"";
+  let savedParts=t.payment_parts;
+  if(typeof savedParts==='string'){try{savedParts=JSON.parse(savedParts)}catch(_){savedParts=null}}
+  let parts=Array.isArray(savedParts)&&savedParts.length?savedParts:null;
+  if(!parts){parts=[{method:t.payment_method||'pix',amount:Number(t.original_amount||t.amount||0),card_id:t.card_id||null,installments:Number(t.installment_total||1),fee_percent:Number(t.fee_percent||0),rate_id:t.rate_id||null}]}
+  const effectiveMethod=parts.length>1?'multiple':(parts[0]?.method||t.payment_method||'pix');
+  setSelectValue("txMethod",effectiveMethod);
+  const wrap=$("paymentParts"); if(wrap){wrap.innerHTML="";parts.forEach(addPaymentPart);}
+  updateMetalFields(); updatePaymentParts();
+  $("txForm button[type=submit]").textContent="Salvar alterações";
+}
+window.editTx=editTx;
+window.closeEditTxModal=closeEditTxModal;
 async function saveTxCore(e){
  e.preventDefault();
  const total=+$('txAmount').value||0,status=$('txStatus').value,method=$('txMethod').value;
