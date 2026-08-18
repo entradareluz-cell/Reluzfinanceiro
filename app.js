@@ -160,8 +160,41 @@ document.addEventListener("DOMContentLoaded",async()=>{
 });
 function loginView(){$("loginView").classList.remove("hidden");$("app").classList.add("hidden")}
 async function start(u){user=u;const r=await getDoc(doc(null,"users",u.uid));$("userName").textContent=r.exists()?r.data().name:(u.displayName||u.email);$("loginView").classList.add("hidden");$("app").classList.remove("hidden");await load();page("dashboard")}
-async function login(e){e.preventDefault();msg("authMsg","");const r=await sb.auth.signInWithPassword({email:$("loginEmail").value.trim(),password:$("loginPassword").value});if(r.error)msg("authMsg",friendlyError(r.error));}
-async function signup(e){e.preventDefault();msg("authMsg","");const r=await sb.auth.signUp({email:$("signupEmail").value.trim(),password:$("signupPassword").value,options:{data:{name:$("signupName").value.trim()}}});if(r.error){msg("authMsg",friendlyError(r.error));return}msg("authMsg","Conta criada e acesso liberado.");}
+async function login(e){
+  e.preventDefault();
+  msg("authMsg","");
+  const button=e.submitter;
+  if(button) button.disabled=true;
+  try{
+    const r=await sb.auth.signInWithPassword({email:$("loginEmail").value.trim(),password:$("loginPassword").value});
+    if(r.error){msg("authMsg",friendlyError(r.error));return;}
+    // O login já salvou a sessão. Agora iniciamos explicitamente o aplicativo.
+    // Antes isso dependia de onAuthStateChange, que não é disparado pelo
+    // adaptador local do Google Sheets; por isso o usuário ficava na tela de login.
+    await start(r.data.user);
+  }catch(err){
+    console.error("Erro ao entrar:",err);
+    msg("authMsg",friendlyError(err));
+  }finally{
+    if(button) button.disabled=false;
+  }
+}
+async function signup(e){
+  e.preventDefault();
+  msg("authMsg","");
+  const button=e.submitter;
+  if(button) button.disabled=true;
+  try{
+    const r=await sb.auth.signUp({email:$("signupEmail").value.trim(),password:$("signupPassword").value,options:{data:{name:$("signupName").value.trim()}}});
+    if(r.error){msg("authMsg",friendlyError(r.error));return;}
+    await start(r.data.user);
+  }catch(err){
+    console.error("Erro ao criar conta:",err);
+    msg("authMsg",friendlyError(err));
+  }finally{
+    if(button) button.disabled=false;
+  }
+}
 
 async function deduplicateCategories(rows){
   const seen=new Map();
