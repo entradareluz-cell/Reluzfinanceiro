@@ -3,10 +3,11 @@
 ## Arquitetura
 
 - Front-end: GitHub Pages
-- Login: Firebase Authentication
-- Banco de dados: Google Sheets
+- Login: **Google Sheets + Google Apps Script**
+- Banco de dados: **Google Sheets**
 - API: Google Apps Script
-- Comprovantes/anexos: Firebase Storage (opcional, mantido para não perder a função de anexos)
+- Firebase/Firestore: **não é mais usado pelo sistema**
+- Comprovantes: o campo de anexo continua disponível para referência, mas o upload para Firebase foi removido.
 
 ## 1. Google Sheets
 
@@ -24,35 +25,30 @@ Em **Implantar → Nova implantação**:
 - Executar como: Eu
 - Quem tem acesso: Qualquer pessoa
 
-A URL usada pelo sistema já está configurada no `app.js`:
+A implantação usada neste pacote é:
 
-`https://script.google.com/macros/s/AKfycbwNTGqkiHjOVEbFrxfN409gY0DPr8sAwoJ_q0Zc1hStpXgAfoDC4ZtvE5Uamq_7qiyl/exec`
+`https://script.google.com/macros/s/AKfycbxylH3Arj4mI19VHlMXPQXg-PJTthrEvAl3UxoNFrUd7Oki_YFPmpOKprJRge8u1yLv/exec`
 
-Se você criar uma nova implantação/URL, altere `API_URL` no `app.js`.
+## 3. Inicializar
 
-## 3. Atualizar uma implantação existente
-
-Se você já tinha publicado o Apps Script, substitua o código pelo `Code.gs` novo, salve e publique uma nova versão da mesma implantação. Não crie uma URL diferente se quiser manter o `API_URL` atual.
-
-## 4. Primeiro teste
-
-Abra no navegador:
-
-`.../exec?action=health`
-
-Deve retornar JSON com:
-
-`RELUZ FINANCEIRO API — Google Sheets funcionando.`
-
-Depois:
+Depois de publicar, abra:
 
 `.../exec?action=setup`
 
-Isso cria/atualiza as abas.
+Isso cria/atualiza as abas do sistema.
+
+## 4. Login
+
+O cadastro e o login agora são feitos diretamente no Apps Script.
+
+- E-mail fica na aba `USUARIOS`.
+- A senha **não é armazenada em texto puro**: o navegador envia um hash SHA-256.
+- A sessão fica somente no navegador (`localStorage`).
+- Não existe mais dependência de Firebase Authentication ou Firestore para entrar no sistema.
 
 ## 5. Dados
 
-As principais abas são:
+Principais abas:
 
 - LANCAMENTOS
 - CATEGORIAS
@@ -97,6 +93,6 @@ O Apps Script cria novas colunas automaticamente quando o front-end enviar um ca
 
 ## Segurança
 
-O login continua sendo validado pelo Firebase Authentication. O Apps Script recebe o `user_id` do usuário autenticado e grava os registros na planilha.
+A API do Apps Script é pública para permitir o funcionamento do GitHub Pages. Por isso, a autenticação do usuário é feita no Apps Script e as senhas são armazenadas apenas como hash SHA-256 na aba `USUARIOS`.
 
-Para uma implantação empresarial com múltiplos usuários, recomenda-se posteriormente validar o token do Firebase no backend antes de aceitar operações de escrita.
+Para um ambiente com vários usuários e dados altamente sensíveis, recomenda-se adicionar autenticação por token no Apps Script posteriormente.

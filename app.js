@@ -1,17 +1,7 @@
-import { initializeApp } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js";
-import {
-  getAuth, onAuthStateChanged, signInWithEmailAndPassword,
-  createUserWithEmailAndPassword, updateProfile, signOut
-} from "https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js";
-import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-storage.js";
-
-const API_URL = "https://script.google.com/macros/s/AKfycbwNTGqkiHjOVEbFrxfN409gY0DPr8sAwoJ_q0Zc1hStpXgAfoDC4ZtvE5Uamq_7qiyl/exec";
-const cfg=window.FIREBASE_CONFIG||{};
-const firebaseReady=cfg.apiKey&&!String(cfg.apiKey).includes("COLE_AQUI")&&cfg.projectId&&cfg.projectId!=="SEU-PROJETO";
-let firebaseApp,auth,storage;
+// RELUZ FINANCEIRO — autenticação e banco 100% via Google Sheets + Apps Script.
+const API_URL = "https://script.google.com/macros/s/AKfycbxylH3Arj4mI19VHlMXPQXg-PJTthrEvAl3UxoNFrUd7Oki_YFPmpOKprJRge8u1yLv/exec";
 let editingTxId = null;
 let machineRates = [];
-if(firebaseReady){firebaseApp=initializeApp(cfg);auth=getAuth(firebaseApp);storage=getStorage(firebaseApp);}
 
 const TABLES={
   transactions:"LANCAMENTOS",categories:"CATEGORIAS",accounts:"CONTAS",cards:"CARTOES",
@@ -93,25 +83,32 @@ function builder(table){
  }
  return apiObj;
 }
+async function sha256(text){
+  const data=new TextEncoder().encode(String(text));
+  const hash=await crypto.subtle.digest("SHA-256",data);
+  return Array.from(new Uint8Array(hash)).map(b=>b.toString(16).padStart(2,"0")).join("");
+}
+function saveSession(u){localStorage.setItem("reluz_session",JSON.stringify(u));}
+function getSessionUser(){try{return JSON.parse(localStorage.getItem("reluz_session")||"null")}catch{return null}}
+function clearSession(){localStorage.removeItem("reluz_session");}
 const sb={
  from:builder,
  auth:{
-  getSession:async()=>({data:{session:auth?.currentUser?{user:auth.currentUser}:null},error:null}),
-  signInWithPassword:async({email,password})=>{try{const r=await signInWithEmailAndPassword(auth,email,password);return {data:{user:r.user},error:null}}catch(error){return {data:null,error}}},
-  signUp:async({email,password,options})=>{
-   try{
-    const r=await createUserWithEmailAndPassword(auth,email,password);
-    const name=options?.data?.name||email.split("@")[0];
-    await updateProfile(r.user,{displayName:name});
-    await api("upsert",{sheet:sheetName("users"),id:r.user.uid,record:{id:r.user.uid,user_id:r.user.uid,name,email,perfil:"usuario",ativo:true,created_at:serverTimestamp()}});
-    for(const [n,t] of defaults){
-      await api("create",{sheet:sheetName("categories"),record:{user_id:r.user.uid,name:n,type:t,active:true,created_at:serverTimestamp()}});
-    }
-    return {data:{user:r.user,session:{user:r.user}},error:null};
-   }catch(error){return {data:null,error}}
-  },
-  signOut:()=>signOut(auth),
-  onAuthStateChange:(callback)=>onAuthStateChanged(auth,(u)=>callback(u?"SIGNED_IN":"SIGNED_OUT",u?{user:u}:null))
+  getSession:async()=>{const u=getSessionUser();return {data:{session:u?{user:u}:null},error:null};},
+  signInWithPassword:async({email,password})=>{try{
+    const r=await api("login",{email:String(email||"").trim().toLowerCase(),password_hash:await sha256(password)});
+    if(!r.data?.user) throw new Error("E-mail ou senha incorretos.");
+    saveSession(r.data.user); return {data:{user:r.data.user,session:{user:r.data.user}},error:null};
+  }catch(error){return {data:null,error}}},
+  signUp:async({email,password,options})=>{try{
+    const cleanEmail=String(email||"").trim().toLowerCase();
+    const name=options?.data?.name||cleanEmail.split("@")[0];
+    const r=await api("signup",{email:cleanEmail,name,password_hash:await sha256(password)});
+    if(!r.data?.user) throw new Error("Não foi possível criar a conta.");
+    saveSession(r.data.user); return {data:{user:r.data.user,session:{user:r.data.user}},error:null};
+  }catch(error){return {data:null,error}}},
+  signOut:async()=>{clearSession();loginView();},
+  onAuthStateChange:(callback)=>{const u=getSessionUser();setTimeout(()=>callback(u?"SIGNED_IN":"SIGNED_OUT",u?{user:u}:null),0);return {unsubscribe(){}};}
  }
 };
 
@@ -127,23 +124,19 @@ function joinRelations(table,row){
 }
 const defaults=[['Salário','entrada'],['Extra','entrada'],['Reembolso','entrada'],['Outros recebimentos','entrada'],['Casa','saida'],['Mercado','saida'],['Alimentação','saida'],['Carro','saida'],['Combustível','saida'],['Contas','saida'],['Celular/Internet','saida'],['Cartão','saida'],['Lazer','saida'],['Compras','saida'],['Pets','saida'],['Família','saida'],['Investimentos','saida'],['Outros','saida']];
 
-function firebaseErrorMessage(err){
- const m=err?.message||String(err||"");
- if(m.includes("auth/invalid-credential")||m.includes("auth/invalid-login-credentials")) return "E-mail ou senha incorretos.";
- if(m.includes("auth/email-already-in-use")) return "Este e-mail já está cadastrado.";
- if(m.includes("auth/weak-password")) return "A senha precisa ter pelo menos 6 caracteres.";
- if(m.includes("auth/invalid-email")) return "E-mail inválido.";
- if(m.includes("permission-denied")) return "Acesso negado pelo Firestore. Verifique as Rules.";
- if(m.includes("failed-precondition")) return "O Firestore recusou a consulta. Verifique as Rules/índices.";
- if(m.includes("network-request-failed")||m.includes("Failed to fetch")) return "Não foi possível conectar ao Firebase.";
- return m;
-}
 let user,categories=[],accounts=[],cards=[],recurring=[],goalsList=[],txs=[],flowChart,catChart;
 const $=x=>document.getElementById(x),today=new Date().toISOString().slice(0,10),thisMonth=today.slice(0,7);
 const money=n=>Number(n||0).toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
 const esc=s=>String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]));
 function msg(id,t){$(id).textContent=t||""}
-function friendlyError(err){const code=err?.code||"";const m=err?.message||String(err||"");if(code.includes("auth/invalid-credential")||code.includes("auth/invalid-login-credentials")||m.includes("Invalid login credentials"))return "E-mail ou senha incorretos.";if(code.includes("auth/unauthorized-domain"))return "Este endereço do GitHub não está autorizado no Firebase Authentication. Adicione entradareluz-cell.github.io em Authentication → Settings → Authorized domains.";if(code.includes("auth/email-already-in-use"))return "Este e-mail já está cadastrado. Use Entrar.";if(code.includes("auth/weak-password"))return "A senha precisa ter pelo menos 6 caracteres.";if(code.includes("auth/invalid-email"))return "E-mail inválido.";if(code.includes("auth/network-request-failed")||m.includes("Failed to fetch")||m.includes("NetworkError"))return "Não foi possível conectar ao Firebase. Verifique sua internet e a configuração.";if(m.includes("permission-denied"))return "Login feito, mas o Firestore bloqueou o acesso. Verifique as Rules.";return m;}
+function friendlyError(err){
+ const m=err?.message||String(err||"");
+ if(m.includes("E-mail ou senha incorretos")) return "E-mail ou senha incorretos.";
+ if(m.includes("E-mail já cadastrado")||m.includes("já está cadastrado")) return "Este e-mail já está cadastrado. Use Entrar.";
+ if(m.includes("Senha")) return m;
+ if(m.includes("Failed to fetch")||m.includes("NetworkError")) return "Não foi possível conectar ao Google Sheets.";
+ return m;
+}
 document.addEventListener("DOMContentLoaded",async()=>{
   $("dashMonth").value=thisMonth;$("reportMonth").value=thisMonth;$("txDate").value=today;
   $("loginForm").onsubmit=login;$("signupForm").onsubmit=signup;$("logout").onclick=()=>sb.auth.signOut();
@@ -152,17 +145,16 @@ document.addEventListener("DOMContentLoaded",async()=>{
   $("dashMonth").onchange=dashboard;$("reportMonth").onchange=report;$("transferForm")?.addEventListener("submit",saveTransfer);$("excel").onclick=excel;$("pdf").onclick=pdf;
   document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>page(b.dataset.page));
   try{
-    if(!firebaseReady) throw new Error("Configuração do Firebase não carregada. Verifique o arquivo config.js.");
     const {data,error}=await sb.auth.getSession();
     if(error) throw error;
     if(data.session) await start(data.session.user); else loginView();
-    sb.auth.onAuthStateChange(async(e,s)=>{try{if(s) await start(s.user); else loginView()}catch(err){console.error("Falha ao abrir a sessão",err);loginView();msg("authMsg",friendlyError(err))}});
   }catch(err){console.error(err);loginView();msg("authMsg",friendlyError(err))}
 });
 function loginView(){$("loginView").classList.remove("hidden");$("app").classList.add("hidden")}
-async function start(u){user=u;const r=await getDoc(doc(db,"users",u.uid));$("userName").textContent=r.exists()?r.data().name:(u.displayName||u.email);$("loginView").classList.add("hidden");$("app").classList.remove("hidden");await load();page("dashboard")}
+async function start(u){user=u;const r=await getDoc(doc(null,"users",u.uid));$("userName").textContent=r.exists()?r.data().name:(u.displayName||u.email);$("loginView").classList.add("hidden");$("app").classList.remove("hidden");await load();page("dashboard")}
 async function login(e){e.preventDefault();msg("authMsg","");const r=await sb.auth.signInWithPassword({email:$("loginEmail").value.trim(),password:$("loginPassword").value});if(r.error)msg("authMsg",friendlyError(r.error));}
-async function signup(e){e.preventDefault();msg("authMsg","");const r=await sb.auth.signUp({email:$("signupEmail").value.trim(),password:$("signupPassword").value,options:{data:{name:$("signupName").value.trim()}}});if(r.error){msg("authMsg",friendlyError(r.error));return}msg("authMsg",r.data.session?"Conta criada e acesso liberado.":"Conta criada. Se a confirmação de e-mail estiver ativa, verifique sua caixa de entrada.");}
+async function signup(e){e.preventDefault();msg("authMsg","");const r=await sb.auth.signUp({email:$("signupEmail").value.trim(),password:$("signupPassword").value,options:{data:{name:$("signupName").value.trim()}}});if(r.error){msg("authMsg",friendlyError(r.error));return}msg("authMsg","Conta criada e acesso liberado.");}
+
 async function deduplicateCategories(rows){
   const seen=new Map();
   const duplicates=[];
@@ -174,7 +166,7 @@ async function deduplicateCategories(rows){
   }
   if(duplicates.length){
     for(const c of duplicates){
-      try{ await deleteDoc(doc(db,"categories",c.id)); }
+      try{ await deleteDoc(doc(null,"categories",c.id)); }
       catch(err){ console.warn("Não foi possível remover categoria duplicada",c.id,err); }
     }
   }
@@ -183,8 +175,7 @@ async function deduplicateCategories(rows){
 
 async function load(){
   if(!user?.uid) return;
-  // Toda consulta é filtrada pelo UID. As Firestore Rules não permitem
-  // consultar uma coleção inteira e depois filtrar no navegador.
+  // Toda consulta é filtrada pelo UID para manter os dados de cada usuário separados na planilha.
   const uid=user.uid;
   let [a,b,c,d,e,f,g]=await Promise.all([
     sb.from("categories").select("*").eq("user_id",uid),
@@ -252,7 +243,7 @@ async function saveCategory(e){
   if(categories.some(c=>String(c.name||"").trim().toLowerCase()===name.toLowerCase() && c.type===type))
     return msg("catMsg","Essa categoria já existe.");
   try{
-    // Grava diretamente no Firestore com o UID do usuário.
+    // Grava diretamente no Google Sheets com o UID do usuário.
     const ref=await addDoc(collectionRef("categories"),{
       user_id:user.uid,
       name,
@@ -274,7 +265,7 @@ async function saveCategory(e){
 async function deleteCategory(id){
   if(!confirm("Excluir esta categoria? Os lançamentos existentes serão mantidos sem categoria."))return;
   try{
-    const ref=doc(db,"categories",id);
+    const ref=doc(null,"categories",id);
     const snap=await getDoc(ref);
     if(!snap.exists() || snap.data().user_id!==user.uid) return msg("catMsg","Categoria não encontrada ou sem permissão.");
     await deleteDoc(ref);
@@ -408,12 +399,11 @@ async function saveTx(e){
  if(status==='pendente' && !editingTxId)parts=[];
  if(method!=='multiple'&&parts.length===0&&status!=='pendente')parts=[{method,amount:target,card_id:$('txCard').value||null,rate_id:null,installments:method==='credit'?(+$('txInstall').value||1):1,fee_percent:method==='credit'?(+(cards.find(c=>c.id===$('txCard').value)?.machine_fee_percent||0)):0}];
  if(status!=='pendente'){const sum=parts.reduce((s,p)=>s+p.amount,0);if(Math.abs(sum-target)>0.01)return msg("txMsg",`As formas de pagamento somam ${money(sum)}, mas o valor a ${status==='parcial'?'pagar/receber agora':'pagar/receber'} é ${money(target)}.`)}
- const g=editingTxId||crypto.randomUUID();let attachmentUrl=txs.find(t=>t.id===editingTxId)?.attachment_url||null;const file=$('txAttachmentFile')?.files?.[0];
- if(file){try{const safe=file.name.replace(/[^a-zA-Z0-9._-]/g,"_");const rr=storageRef(storage,`users/${user.uid}/comprovantes/${g}-${safe}`);await uploadBytes(rr,file);attachmentUrl=await getDownloadURL(rr)}catch(err){return msg("txMsg","Não foi possível enviar o comprovante: "+friendlyError(err))}}
+ const g=editingTxId||crypto.randomUUID();let attachmentUrl=txs.find(t=>t.id===editingTxId)?.attachment_url||null;const file=$("txAttachmentFile")?.files?.[0];if(file) attachmentUrl="arquivo-local:"+file.name;
  const categoryName=categories.find(c=>c.id===$('txCat').value)?.name||"";
  const base={user_id:user.uid,type:$('txType').value,amount:total,original_amount:total,transaction_date:$('txDate').value,competence_date:$('txDate').value,paid_date:$('txPaidDate').value||null,category_id:$('txCat').value,subcategory:$('txSubcategory').value||null,account_id:$('txAccount').value||null,card_id:$('txCard').value||null,payment_method:method,status,name:$('txName').value.trim(),description:$('txDesc').value.trim()||null,notes:$('txNotes').value||null,dre_class:$('txDreClass')?.value||($('txType').value==='entrada'?'receita':'despesa_operacional'),attachment_url:attachmentUrl,recurrence:$('txRecurring').value,group_id:g,payment_parts:parts,payment_received_amount:target,payment_fee_total:parts.reduce((s,p)=>s+p.amount*(p.fee_percent||0)/100,0),metal_value:+($("txMetalValue")?.value||0)||0,initial_kg:+($("txInitialKg")?.value||0)||0,final_kg:+($("txFinalKg")?.value||0)||0,category_name:categoryName};
  if(editingTxId){
-   const ref=doc(db,"transactions",editingTxId);const current=txs.find(t=>t.id===editingTxId)||{};
+   const ref=doc(null,"transactions",editingTxId);const current=txs.find(t=>t.id===editingTxId)||{};
    const fee=parts[0]?.fee_percent||0, net=total-total*fee/100;
    await updateDoc(ref,{...base,amount:net,original_amount:total,fee_percent:fee,edited_at:serverTimestamp(),installment_number:current.installment_number||1,installment_total:current.installment_total||1});
    msg("txMsg","Lançamento atualizado.");clearTxForm();await load();return;
@@ -437,7 +427,7 @@ async function saveTx(e){
  let r=await sb.from("transactions").insert(rows);msg("txMsg",r.error?.message||"Lançamento salvo.");if(!r.error){clearTxForm();await load()}
 }
 async function saveMachineRate(e){e.preventDefault();const name=$("rateName").value.trim();if(!name)return msg("rateMsg","Informe o nome da maquininha.");const r=await sb.from("machine_rates").insert({user_id:user.uid,name,credit_percent:+$("rateCredit").value||0,debit_percent:+$("rateDebit").value||0,pix_percent:+$("ratePix").value||0,active:true});msg("rateMsg",r.error?.message||"Taxa cadastrada.");if(!r.error){$("rateForm").reset();$("rateCredit").value=0;$("rateDebit").value=0;$("ratePix").value=0;await load()}}
-async function deleteMachineRate(id){if(!confirm("Excluir esta taxa?"))return;try{await deleteDoc(doc(db,"machine_rates",id));await load()}catch(err){msg("rateMsg",friendlyError(err))}}
+async function deleteMachineRate(id){if(!confirm("Excluir esta taxa?"))return;try{await deleteDoc(doc(null,"machine_rates",id));await load()}catch(err){msg("rateMsg",friendlyError(err))}}
 function renderMachineRates(){const el=$("rateBody");if(!el)return;el.innerHTML=machineRates.map(r=>`<div class="rate-row"><div><b>${esc(r.name)}</b><small>Crédito: ${Number(r.credit_percent||0).toFixed(2)}% · Débito: ${Number(r.debit_percent||0).toFixed(2)}% · PIX: ${Number(r.pix_percent||0).toFixed(2)}%</small></div><button type="button" class="danger" onclick="deleteMachineRate('${r.id}')">Excluir</button></div>`).join("")||'<div class="empty-rate">Nenhuma taxa cadastrada.</div>'}
 async function saveCard(e){e.preventDefault();let r=await sb.from("cards").insert({user_id:user.uid,name:$("cardName").value,limit_amount:+$("cardLimit").value,closing_day:+$("cardClose").value,due_day:+$("cardDue").value,last4:$("cardLast4")?.value||null,machine_fee_percent:+$("cardFee")?.value||0,active:true});msg("cardMsg",r.error?.message||"Cartão cadastrado.");if(!r.error){$("cardForm").reset();await load()}}
 async function saveRec(e){e.preventDefault();let r=await sb.from("recurring").insert({user_id:user.uid,type:$("recType")?.value||"saida",description:$("recDesc").value,amount:+$("recAmount").value,category_id:$("recCat").value,due_day:+$("recDay").value,start_date:$("recStart").value,end_date:$("recEnd").value||null});msg("recMsg",r.error?.message||"Cadastrado.");if(!r.error){$("recForm").reset();await load()}}

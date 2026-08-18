@@ -40,7 +40,7 @@ const INITIAL_HEADERS = {
   TAXAS: ["id","user_id","name","credit_percent","debit_percent","pix_percent","active","created_at","updated_at"],
   RECORRENTES: ["id","user_id","type","description","amount","category_id","due_day","start_date","end_date","active","created_at","updated_at"],
   METAS: ["id","user_id","name","target_amount","current_amount","deadline","status","created_at","updated_at"],
-  USUARIOS: ["id","user_id","name","email","perfil","ativo","created_at","updated_at"],
+  USUARIOS: ["id","user_id","name","email","password_hash","perfil","ativo","created_at","updated_at"],
   SUBCATEGORIAS: ["id","user_id","category_id","name","active","created_at","updated_at"],
   RECEBIMENTOS: ["id","lancamento_id","user_id","method","amount","card_id","installments","fee_percent","fee_value","net_amount","rate_id","date","notes","created_at"],
   PARCELAS: ["id","lancamento_id","user_id","installment_number","installment_total","transaction_date","competence_date","paid_date","amount","original_amount","fee_percent","payment_fee_total","status","account_id","card_id","created_at","updated_at"],
@@ -64,6 +64,63 @@ function now_() {
 
 function id_() {
   return Utilities.getUuid();
+}
+
+
+function findUserByEmail_(email) {
+  const clean = String(email || "").trim().toLowerCase();
+  if (!clean) return null;
+  const users = list_(TABLES.USUARIOS, "");
+  return users.find(u => String(u.email || "").trim().toLowerCase() === clean) || null;
+}
+
+function publicUser_(u) {
+  if (!u) return null;
+  return {
+    uid: String(u.id || u.user_id || ""),
+    displayName: String(u.name || ""),
+    email: String(u.email || ""),
+    perfil: String(u.perfil || "usuario"),
+    ativo: u.ativo !== false && String(u.ativo).toLowerCase() !== "false"
+  };
+}
+
+function login_(email, passwordHash) {
+  const u = findUserByEmail_(email);
+  if (!u || !u.password_hash || String(u.password_hash) !== String(passwordHash || "")) {
+    throw new Error("E-mail ou senha incorretos.");
+  }
+  if (u.ativo === false || String(u.ativo).toLowerCase() === "false") {
+    throw new Error("Usuário inativo.");
+  }
+  return publicUser_(u);
+}
+
+function signup_(email, name, passwordHash) {
+  const clean = String(email || "").trim().toLowerCase();
+  if (!clean || !clean.includes("@")) throw new Error("E-mail inválido.");
+  if (!passwordHash) throw new Error("Senha obrigatória.");
+  if (findUserByEmail_(clean)) throw new Error("Este e-mail já está cadastrado.");
+  const uid = id_();
+  const user = create_(TABLES.USUARIOS, {
+    id: uid,
+    user_id: uid,
+    name: String(name || clean.split("@")[0]).trim(),
+    email: clean,
+    password_hash: String(passwordHash),
+    perfil: "usuario",
+    ativo: true
+  });
+  const defaultCategories = [
+    ["Salário","entrada"],["Extra","entrada"],["Reembolso","entrada"],["Outros recebimentos","entrada"],
+    ["Casa","saida"],["Mercado","saida"],["Alimentação","saida"],["Carro","saida"],["Combustível","saida"],
+    ["Contas","saida"],["Celular/Internet","saida"],["Cartão","saida"],["Lazer","saida"],["Compras","saida"],
+    ["Pets","saida"],["Família","saida"],["Investimentos","saida"],["Outros","saida"]
+  ];
+  defaultCategories.forEach(([n,t]) => create_(TABLES.CATEGORIAS, {
+    user_id: uid, name:n, type:t, active:true
+  }));
+  return publicUser_(user);
 }
 
 function out_(obj) {
@@ -279,6 +336,8 @@ function doGet(e) {
   try {
     const p=input_(e), action=p.action||"health";
     if(action==="health") return out_({success:true,message:"RELUZ FINANCEIRO API — Google Sheets funcionando.",time:now_()});
+    if(action==="login") return out_({success:true,data:{user:login_(p.email,p.password_hash)}});
+    if(action==="signup") return out_({success:true,data:{user:signup_(p.email,p.name,p.password_hash)}});
     if(action==="setup") return out_(setupDatabase());
     if(action==="list") return out_({success:true,data:list_(p.sheet,p.user_id||"")});
     if(action==="get") return out_({success:true,data:find_(p.sheet,p.id)});
@@ -292,6 +351,8 @@ function doGet(e) {
 function doPost(e) {
   try {
     const p=input_(e), action=p.action;
+    if(action==="login") return out_({success:true,data:{user:login_(p.email,p.password_hash)}});
+    if(action==="signup") return out_({success:true,data:{user:signup_(p.email,p.name,p.password_hash)}});
     if(action==="setup") return out_(setupDatabase());
     if(action==="list") return out_({success:true,data:list_(p.sheet,p.user_id||"")});
     if(action==="get") return out_({success:true,data:find_(p.sheet,p.id)});
