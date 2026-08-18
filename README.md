@@ -27,7 +27,7 @@ Em **Implantar → Nova implantação**:
 
 A implantação usada neste pacote é:
 
-`https://script.google.com/macros/s/AKfycbxylH3Arj4mI19VHlMXPQXg-PJTthrEvAl3UxoNFrUd7Oki_YFPmpOKprJRge8u1yLv/exec`
+`https://script.google.com/macros/s/AKfycbzmN3PTZUfie-PvoS1NL8IooXfz3nz57aWHaYDxXCk6ggX0dz98HVasyPeeiwZWlosT/exec`
 
 ## 3. Inicializar
 

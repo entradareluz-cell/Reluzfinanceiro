@@ -1,5 +1,5 @@
 // RELUZ FINANCEIRO — autenticação e banco 100% via Google Sheets + Apps Script.
-const API_URL = "https://script.google.com/macros/s/AKfycbxylH3Arj4mI19VHlMXPQXg-PJTthrEvAl3UxoNFrUd7Oki_YFPmpOKprJRge8u1yLv/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbzmN3PTZUfie-PvoS1NL8IooXfz3nz57aWHaYDxXCk6ggX0dz98HVasyPeeiwZWlosT/exec";
 let editingTxId = null;
 let machineRates = [];
 
@@ -13,24 +13,11 @@ const TABLES={
 function sheetName(table){return TABLES[table]||String(table||"").toUpperCase();}
 async function api(action,payload={}){
   const body={action,...payload};
-  // Apps Script Web Apps redirecionam requisições POST e alguns hosts do GitHub
-  // bloqueiam a resposta por CORS. Para leitura/autenticação usamos GET, que
-  // funciona diretamente na implantação pública.
-  const readActions=new Set(["health","login","signup","get","list","dashboard","dre","search"]);
-  let res;
-  if(readActions.has(action)){
-    const qs=new URLSearchParams();
-    Object.entries(body).forEach(([k,v])=>{
-      if(v!==undefined && v!==null) qs.set(k,typeof v==="object"?JSON.stringify(v):String(v));
-    });
-    res=await fetch(API_URL+"?"+qs.toString(),{method:"GET",cache:"no-store"});
-  }else{
-    res=await fetch(API_URL,{
-      method:"POST",
-      headers:{"Content-Type":"text/plain;charset=utf-8"},
-      body:JSON.stringify(body)
-    });
-  }
+  const res=await fetch(API_URL,{
+    method:"POST",
+    headers:{"Content-Type":"text/plain;charset=utf-8"},
+    body:JSON.stringify(body)
+  });
   const text=await res.text();
   let data;
   try{data=JSON.parse(text)}catch{throw new Error(text||"Resposta inválida do Apps Script.");}
