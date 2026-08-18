@@ -349,42 +349,201 @@ function search_(userId,q) {
   return out;
 }
 
+function saveMultiplePayments_(userId, transaction, payments, dedupeKey) {
+  const uid = String(userId || '').trim();
+  if (!uid) throw new Error('Usuário não informado.');
+  if (!Array.isArray(payments) || !payments.length) throw new Error('Nenhuma forma de pagamento informada.');
+  const key = String(dedupeKey || '').trim();
+  if (!key) throw new Error('Chave de segurança não informada.');
+
+  const existing = list_(TABLES.LANCAMENTOS, uid).find(r => String(r.dedupe_key || '') === key);
+  if (existing) return {duplicate:true,data:[existing],transaction:existing,recebimentos:[],parcelas:[]};
+
+  const transactionId = transaction.id || id_();
+  const total = Number(transaction.amount) || 0;
+  let totalReceived = 0;
+  let totalFee = 0;
+  payments.forEach(p => {
+    const amount = Number(p.amount) || 0;
+    const feePercent = Number(p.fee_percent) || 0;
+    totalReceived += amount;
+    totalFee += amount * feePercent / 100;
+  });
+
+  const main = create_(TABLES.LANCAMENTOS, Object.assign({}, transaction, {
+    id: transactionId,
+    user_id: uid,
+    amount: total,
+    original_amount: transaction.original_amount || total,
+    payment_parts: JSON.stringify(payments),
+    payment_received_amount: totalReceived,
+    payment_fee_total: totalFee,
+    dedupe_key: key
+  }));
+
+  const recebimentos = [];
+  const parcelas = [];
+  payments.forEach(payment => {
+    const amount = Number(payment.amount) || 0;
+    const feePercent = Number(payment.fee_percent) || 0;
+    const fee = amount * feePercent / 100;
+    recebimentos.push(create_(TABLES.RECEBIMENTOS, {
+      id:id_(), lancamento_id:transactionId, user_id:uid,
+      method:payment.method || payment.payment_method || '', amount,
+      card_id:payment.card_id || '', installments:Number(payment.installments)||1,
+      fee_percent:feePercent, fee_value:fee, net_amount:amount-fee,
+      rate_id:payment.rate_id || '', date:payment.date || transaction.transaction_date || '',
+      notes:payment.notes || '', created_at:now_()
+    }));
+
+    const totalInstallments = Math.max(1, Number(payment.installments) || 1);
+    if (totalInstallments > 1) {
+      const gross = amount / totalInstallments;
+      for (let i=1;i<=totalInstallments;i++) {
+        const d = addMonths_(payment.date || transaction.transaction_date || now_(), i-1);
+        const feeValue = gross * feePercent / 100;
+        parcelas.push(create_(TABLES.PARCELAS, {
+          id:id_(), lancamento_id:transactionId, user_id:uid,
+          installment_number:i, installment_total:totalInstallments,
+          transaction_date:d, competence_date:d, paid_date:'',
+          amount:gross-feeValue, original_amount:gross,
+          fee_percent:feePercent, payment_fee_total:feeValue,
+          status:'pendente', account_id:payment.account_id || '', card_id:payment.card_id || '',
+          created_at:now_(), updated_at:now_()
+        }));
+      }
+    }
+  });
+
+  return {duplicate:false,transaction:main,recebimentos,parcelas};
+}
+
+function apiAction_(p) {
+  const action = String(p.action || '').trim().toLowerCase();
+
+  // Compatibilidade com versões antigas do app.js.
+  const aliases = {
+    save_transaction: 'save_transactions',
+    save_lancamento: 'save_transactions',
+    save_lancamento_financeiro: 'save_transactions',
+    create_transaction: 'create',
+    create_lancamento: 'create',
+    update_transaction: 'update',
+    update_lancamento: 'update',
+    edit_transaction: 'update',
+    edit_lancamento: 'update',
+    delete_transaction: 'delete',
+    delete_lancamento: 'delete',
+    list_transactions: 'list',
+    list_lancamentos: 'list',
+    get_transaction: 'get',
+    get_lancamento: 'get'
+  };
+
+  const a = aliases[action] || action;
+
+  if (a === 'health') {
+    return {success:true,message:'RELUZ FINANCEIRO API — Google Sheets funcionando.',time:now_()};
+  }
+
+  if (a === 'login') {
+    return {success:true,data:{user:login_(p.email,p.password_hash)}};
+  }
+
+  if (a === 'signup') {
+    return {success:true,data:{user:signup_(p.email,p.name,p.password_hash)}};
+  }
+
+  if (a === 'setup') return setupDatabase();
+
+  if (a === 'list') {
+    return {success:true,data:list_(p.sheet,p.user_id || '')};
+  }
+
+  if (a === 'get') {
+    return {success:true,data:find_(p.sheet,p.id)};
+  }
+
+  if (a === 'create') {
+    return {success:true,data:create_(p.sheet,p.record || {})};
+  }
+
+  if (a === 'update') {
+    if (!p.sheet) throw new Error('Planilha não informada para edição.');
+    if (!p.id) throw new Error('ID do lançamento não informado para edição.');
+    return {success:true,data:update_(p.sheet,p.id,p.record || {})};
+  }
+
+  if (a === 'upsert') {
+    return {success:true,data:upsert_(p.sheet,p.id,p.record || {})};
+  }
+
+  if (a === 'delete') {
+    return delete_(p.sheet,p.id);
+  }
+
+  if (a === 'save_transactions') {
+    return Object.assign(
+      {success:true},
+      saveTransactions_(p.user_id || '',p.dedupe_key || '',p.rows || [])
+    );
+  }
+
+  if (a === 'save_multiple_payments') {
+    return Object.assign(
+      {success:true},
+      saveMultiplePayments_(
+        p.user_id || '',
+        p.transaction || {},
+        p.payments || [],
+        p.dedupe_key || ''
+      )
+    );
+  }
+
+  if (a === 'remove_duplicate_categories') {
+    return {success:true,data:removeDuplicateCategories_(p.user_id || '')};
+  }
+
+  if (a === 'dashboard') {
+    return {success:true,data:dashboard_(p.user_id || '')};
+  }
+
+  if (a === 'dre') {
+    return {success:true,data:dre_(p.user_id || '')};
+  }
+
+  if (a === 'search') {
+    return {success:true,data:search_(p.user_id || '',p.q)};
+  }
+
+  throw new Error('Ação não reconhecida: ' + (action || '(vazia)'));
+}
+
 function doGet(e) {
   try {
-    const p=input_(e), action=p.action||"health";
-    if(action==="health") return out_({success:true,message:"RELUZ FINANCEIRO API — Google Sheets funcionando.",time:now_()});
-    if(action==="login") return out_({success:true,data:{user:login_(p.email,p.password_hash)}});
-    if(action==="signup") return out_({success:true,data:{user:signup_(p.email,p.name,p.password_hash)}});
-    if(action==="setup") return out_(setupDatabase());
-    if(action==="list") return out_({success:true,data:list_(p.sheet,p.user_id||"")});
-    if(action==="get") return out_({success:true,data:find_(p.sheet,p.id)});
-    if(action==="dashboard") return out_({success:true,data:dashboard_(p.user_id||"")});
-    if(action==="dre") return out_({success:true,data:dre_(p.user_id||"")});
-    if(action==="search") return out_({success:true,data:search_(p.user_id||"",p.q)});
-    return out_({success:false,error:"Ação não reconhecida."});
-  } catch(err) { return out_({success:false,error:String(err.message||err)}); }
+    const p = input_(e);
+    return out_(apiAction_(p));
+  } catch (err) {
+    return out_({
+      success:false,
+      error:String(err && err.message ? err.message : err),
+      action:String((e && e.parameter && e.parameter.action) || '')
+    });
+  }
 }
 
 function doPost(e) {
   try {
-    const p=input_(e), action=p.action;
-    if(action==="login") return out_({success:true,data:{user:login_(p.email,p.password_hash)}});
-    if(action==="signup") return out_({success:true,data:{user:signup_(p.email,p.name,p.password_hash)}});
-    if(action==="setup") return out_(setupDatabase());
-    if(action==="list") return out_({success:true,data:list_(p.sheet,p.user_id||"")});
-    if(action==="get") return out_({success:true,data:find_(p.sheet,p.id)});
-    if(action==="save_transactions") return out_(Object.assign({success:true}, saveTransactions_(p.user_id||"", p.dedupe_key||"", p.rows||[])));
-    if(action==="create") return out_({success:true,data:create_(p.sheet,p.record||{})});
-    if(action==="update") return out_({success:true,data:update_(p.sheet,p.id,p.record||{})});
-    if(action==="upsert") return out_({success:true,data:upsert_(p.sheet,p.id,p.record||{})});
-    if(action==="delete") return out_(delete_(p.sheet,p.id));
-    if(action==="remove_duplicate_categories") return out_({success:true,data:removeDuplicateCategories_(p.user_id||"")});
-    if(action==="dashboard") return out_({success:true,data:dashboard_(p.user_id||"")});
-    if(action==="dre") return out_({success:true,data:dre_(p.user_id||"")});
-    if(action==="search") return out_({success:true,data:search_(p.user_id||"",p.q)});
-    return out_({success:false,error:"Ação não reconhecida."});
-  } catch(err) {
-    return out_({success:false,error:String(err.message||err),stack:String(err.stack||"")});
+    const p = input_(e);
+    return out_(apiAction_(p));
+  } catch (err) {
+    return out_({
+      success:false,
+      error:String(err && err.message ? err.message : err),
+      stack:String(err && err.stack ? err.stack : ''),
+      action:String((e && e.parameter && e.parameter.action) || '')
+    });
   }
 }
 
