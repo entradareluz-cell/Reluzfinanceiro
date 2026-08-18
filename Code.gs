@@ -4,7 +4,8 @@
  * Google Sheets + Google Apps Script API
  *
  * A planilha é o banco de dados.
- * O Firebase Authentication continua sendo usado somente para login.
+ * A autenticação é feita por sessão assinada pelo Apps Script.
+ * O navegador nunca define sozinho o usuário autorizado.
  */
 
 const CONFIG = {
@@ -33,7 +34,7 @@ const TABLES = {
 };
 
 const INITIAL_HEADERS = {
-  LANCAMENTOS: ["id","user_id","type","amount","original_amount","transaction_date","competence_date","paid_date","category_id","subcategory","account_id","card_id","payment_method","status","name","description","notes","dre_class","attachment_url","recurrence","group_id","payment_parts","payment_received_amount","payment_fee_total","metal_value","initial_kg","final_kg","category_name","fee_percent","installment_number","installment_total","rate_id","transfer_group_id","created_at","updated_at"],
+  LANCAMENTOS: ["id","user_id","type","amount","original_amount","remaining_amount","transaction_date","competence_date","paid_date","category_id","subcategory","account_id","card_id","payment_method","status","name","description","notes","dre_class","attachment_url","recurrence","group_id","payment_parts","payment_received_amount","payment_fee_total","metal_value","initial_kg","final_kg","category_name","fee_percent","installment_number","installment_total","rate_id","transfer_group_id","created_at","updated_at"],
   CATEGORIAS: ["id","user_id","name","type","active","created_at","updated_at"],
   CONTAS: ["id","user_id","name","type","initial_balance","active","created_at","updated_at"],
   CARTOES: ["id","user_id","name","limit_amount","closing_day","due_day","last4","machine_fee_percent","active","created_at","updated_at"],
@@ -82,6 +83,76 @@ function dateOnly_(value) {
 
 function id_() {
   return Utilities.getUuid();
+}
+
+function authSecret_() {
+  const props = PropertiesService.getScriptProperties();
+  let secret = props.getProperty("RELUZ_AUTH_SECRET");
+  if (!secret) {
+    secret = Utilities.getUuid() + Utilities.getUuid() + Utilities.getUuid();
+    props.setProperty("RELUZ_AUTH_SECRET", secret);
+  }
+  return secret;
+}
+
+function base64UrlEncode_(text) {
+  return Utilities.base64EncodeWebSafe(Utilities.newBlob(String(text)).getBytes()).replace(/=+$/g, "");
+}
+
+function base64UrlDecode_(text) {
+  const padded = String(text || "") + "=".repeat((4 - (String(text || "").length % 4)) % 4);
+  return Utilities.newBlob(Utilities.base64DecodeWebSafe(padded)).getDataAsString();
+}
+
+function signToken_(payloadText) {
+  const sig = Utilities.computeHmacSha256Signature(payloadText, authSecret_());
+  return Utilities.base64EncodeWebSafe(sig).replace(/=+$/g, "");
+}
+
+function createSessionToken_(user) {
+  const payload = {
+    uid: normalizeEmail_(user.email) || String(user.id || ""),
+    email: normalizeEmail_(user.email),
+    perfil: String(user.perfil || "usuario"),
+    exp: Date.now() + 1000 * 60 * 60 * 24 * 7
+  };
+  const encoded = base64UrlEncode_(JSON.stringify(payload));
+  return encoded + "." + signToken_(encoded);
+}
+
+function verifySession_(token) {
+  const raw = String(token || "").trim();
+  if (!raw || !raw.includes(".")) throw new Error("Sessão inválida ou expirada. Faça login novamente.");
+  const parts = raw.split(".");
+  if (parts.length !== 2) throw new Error("Sessão inválida. Faça login novamente.");
+  const encoded = parts[0], signature = parts[1];
+  if (signToken_(encoded) !== signature) throw new Error("Sessão inválida. Faça login novamente.");
+  let payload;
+  try { payload = JSON.parse(base64UrlDecode_(encoded)); } catch (_) { throw new Error("Sessão inválida. Faça login novamente."); }
+  if (!payload.uid || !payload.email || Number(payload.exp || 0) < Date.now()) throw new Error("Sessão expirada. Faça login novamente.");
+  const u = findUserByEmail_(payload.email);
+  if (!u || u.ativo === false || String(u.ativo).toLowerCase() === "false") throw new Error("Usuário inativo ou inexistente.");
+  return { uid: normalizeEmail_(u.email) || String(u.id || ""), email: normalizeEmail_(u.email), perfil: String(u.perfil || "usuario") };
+}
+
+function requireAuth_(p) {
+  return verifySession_(p && p.session_token);
+}
+
+function assertSheet_(sheetName) {
+  const name = String(sheetName || "").trim().toUpperCase();
+  if (!Object.values(TABLES).includes(name)) throw new Error("Tabela não autorizada.");
+  return name;
+}
+
+function assertOwned_(sheetName, id, userId) {
+  const name = assertSheet_(sheetName);
+  const record = find_(name, id);
+  if (!record) throw new Error("Registro não encontrado.");
+  if (!record.user_id || !userKeys_(userId).some(k => String(record.user_id) === String(k))) {
+    throw new Error("Acesso negado ao registro.");
+  }
+  return record;
 }
 
 // Identidade principal do usuário: o e-mail normalizado.
@@ -260,6 +331,27 @@ function list_(sheetName, userId) {
     .filter(r => !userId || !("user_id" in r) || userKeys_(userId).some(k => String(r.user_id) === String(k)));
 }
 
+function listOwned_(sheetName, userId) {
+  const name = assertSheet_(sheetName);
+  return list_(name, userId);
+}
+
+function audit_(userId, action, tableName, recordId, data) {
+  try {
+    create_(TABLES.AUDITORIA, {
+      id: id_(),
+      user_id: normalizeEmail_(userId) || String(userId || ""),
+      action: String(action || ""),
+      table_name: String(tableName || ""),
+      record_id: String(recordId || ""),
+      data: data || {},
+      date: now_()
+    });
+  } catch (e) {
+    console.error("Falha ao registrar auditoria", e);
+  }
+}
+
 function find_(sheetName,id) {
   const sh = sheet_(sheetName);
   const values = rows_(sh);
@@ -365,9 +457,10 @@ function dre_(userId) {
   const tx=list_(TABLES.LANCAMENTOS,userId);
   let receitaBruta=0,deducoes=0,custos=0,despesasOperacionais=0,despesasFinanceiras=0,investimentos=0;
   tx.forEach(t=>{
-    const v=Number(t.amount)||0;
+    const v=Math.abs(Number(t.amount)||0);
     const type=String(t.type||"").toLowerCase();
     const c=String(t.dre_class||"").toLowerCase();
+    if(c==="deducao_receita") { deducoes+=v; return; }
     if(["entrada","income","receita"].includes(type)) receitaBruta+=v;
     if(["saida","expense","despesa"].includes(type)){
       if(c==="custo") custos+=v;
@@ -464,12 +557,14 @@ function updateTransaction_(userId, id, record) {
   if (patch.competence_date) patch.competence_date = dateOnly_(patch.competence_date);
   if (patch.paid_date) patch.paid_date = dateOnly_(patch.paid_date);
 
-  const parts = normalizePaymentParts_(patch.payment_parts);
-  if (parts.length) {
+  if (patch.payment_parts !== undefined) {
+    const parts = normalizePaymentParts_(patch.payment_parts);
     const child = replacePaymentChildren_(userId, id, Object.assign({}, current, patch), parts);
     patch.payment_parts = parts;
     patch.payment_received_amount = child.totalReceived;
     patch.payment_fee_total = child.totalFee;
+    patch.remaining_amount = Math.max(0, Number(patch.original_amount || current.original_amount || patch.amount || current.amount || 0) - child.totalReceived);
+    if (patch.status === undefined || patch.status === "") patch.status = patch.remaining_amount > 0 ? "parcial" : "pago";
   }
   return update_(TABLES.LANCAMENTOS, id, patch);
 }
@@ -496,10 +591,13 @@ function saveMultiplePayments_(userId, transaction, payments, dedupeKey) {
     let totalFee = 0;
     payments.forEach(p => {
       const amount = Number(p.amount) || 0;
+      if (amount < 0) throw new Error('Valor de pagamento não pode ser negativo.');
       const feePercent = Number(p.fee_percent) || 0;
       totalReceived += amount;
       totalFee += amount * feePercent / 100;
     });
+    if (totalReceived > total) throw new Error('A soma dos pagamentos não pode ultrapassar o valor do lançamento.');
+    const remainingAmount = Math.max(0, total - totalReceived);
 
     const main = create_(TABLES.LANCAMENTOS, Object.assign({}, transaction, {
       id: transactionId,
@@ -509,6 +607,8 @@ function saveMultiplePayments_(userId, transaction, payments, dedupeKey) {
       payment_parts: payments,
       payment_received_amount: totalReceived,
       payment_fee_total: totalFee,
+      remaining_amount: remainingAmount,
+      status: transaction.status || (remainingAmount > 0 ? 'parcial' : 'pago'),
       dedupe_key: key
     }));
 
@@ -583,14 +683,14 @@ function doGet(e) {
   try {
     const p=input_(e), action=p.action||"health";
     if(action==="health") return out_({success:true,message:"RELUZ FINANCEIRO API — Google Sheets funcionando.",time:now_()});
-    if(action==="login") return out_({success:true,data:{user:login_(p.email,p.password_hash)}});
-    if(action==="signup") return out_({success:true,data:{user:signup_(p.email,p.name,p.password_hash)}});
-    if(action==="setup") return out_(setupDatabase());
-    if(action==="list") return out_({success:true,data:list_(p.sheet,p.user_id||"")});
-    if(action==="get") return out_({success:true,data:find_(p.sheet,p.id)});
-    if(action==="dashboard") return out_({success:true,data:dashboard_(p.user_id||"")});
-    if(action==="dre") return out_({success:true,data:dre_(p.user_id||"")});
-    if(action==="search") return out_({success:true,data:search_(p.user_id||"",p.q)});
+    if(action==="login") { const user=login_(p.email,p.password_hash); return out_({success:true,data:{user,session_token:createSessionToken_(user)}}); }
+    if(action==="signup") { const user=signup_(p.email,p.name,p.password_hash); return out_({success:true,data:{user,session_token:createSessionToken_(user)}}); }
+    const auth=requireAuth_(p);
+    if(action==="list") return out_({success:true,data:listOwned_(p.sheet,auth.uid)});
+    if(action==="get") return out_({success:true,data:assertOwned_(p.sheet,p.id,auth.uid)});
+    if(action==="dashboard") return out_({success:true,data:dashboard_(auth.uid)});
+    if(action==="dre") return out_({success:true,data:dre_(auth.uid)});
+    if(action==="search") return out_({success:true,data:search_(auth.uid,p.q)});
     return out_({success:false,error:"Ação não reconhecida."});
   } catch(err) { return out_({success:false,error:String(err.message||err)}); }
 }
@@ -598,30 +698,44 @@ function doGet(e) {
 function doPost(e) {
   try {
     const p=input_(e), action=p.action;
-    if(action==="login") return out_({success:true,data:{user:login_(p.email,p.password_hash)}});
-    if(action==="signup") return out_({success:true,data:{user:signup_(p.email,p.name,p.password_hash)}});
-    if(action==="setup") return out_(setupDatabase());
-    if(action==="list") return out_({success:true,data:list_(p.sheet,p.user_id||"")});
-    if(action==="get") return out_({success:true,data:find_(p.sheet,p.id)});
-    if(action==="save_transaction") return out_({success:true, data:saveTransaction_(p.user_id||"", p.record||{}, p.dedupe_key||"")});
-    if(action==="save_transactions") return out_(Object.assign({success:true}, saveTransactions_(p.user_id||"", p.dedupe_key||"", p.rows||[])));
-    if(action==="save_multiple_payments") return out_(Object.assign({success:true}, saveMultiplePayments_(p.user_id||"", p.transaction||{}, p.payments||[], p.dedupe_key||"")));
-    if(action==="create") return out_({success:true,data:create_(p.sheet,p.record||{})});
-    if(action==="update") {
-      if (String(p.sheet||"").toUpperCase() === TABLES.LANCAMENTOS) {
-        return out_({success:true,data:updateTransaction_(p.user_id||"",p.id,p.record||{})});
-      }
-      return out_({success:true,data:update_(p.sheet,p.id,p.record||{})});
+    if(action==="login") { const user=login_(p.email,p.password_hash); return out_({success:true,data:{user,session_token:createSessionToken_(user)}}); }
+    if(action==="signup") { const user=signup_(p.email,p.name,p.password_hash); return out_({success:true,data:{user,session_token:createSessionToken_(user)}}); }
+    if(action==="health") return out_({success:true,message:"RELUZ FINANCEIRO API — Google Sheets funcionando.",time:now_()});
+
+    const auth=requireAuth_(p);
+    const uid=auth.uid;
+    if(action==="setup") { if(auth.perfil!=="admin") throw new Error("Apenas administradores podem inicializar o banco."); return out_(setupDatabase()); }
+    if(action==="list") return out_({success:true,data:listOwned_(p.sheet,uid)});
+    if(action==="get") return out_({success:true,data:assertOwned_(p.sheet,p.id,uid)});
+    if(action==="save_transaction") return out_({success:true, data:saveTransaction_(uid, p.record||{}, p.dedupe_key||"")});
+    if(action==="save_transactions") return out_(Object.assign({success:true}, saveTransactions_(uid, p.dedupe_key||"", p.rows||[])));
+    if(action==="save_multiple_payments") return out_(Object.assign({success:true}, saveMultiplePayments_(uid, p.transaction||{}, p.payments||[], p.dedupe_key||"")));
+    if(action==="create") {
+      const sheet=assertSheet_(p.sheet); const record=Object.assign({},p.record||{}, {user_id:uid}); delete record.id;
+      const created=create_(sheet,record); audit_(uid,"create",sheet,created.id,created); return out_({success:true,data:created});
     }
-    if(action==="upsert") return out_({success:true,data:upsert_(p.sheet,p.id,p.record||{})});
-    if(action==="delete") return out_(delete_(p.sheet,p.id));
-    if(action==="remove_duplicate_categories") return out_({success:true,data:removeDuplicateCategories_(p.user_id||"")});
-    if(action==="dashboard") return out_({success:true,data:dashboard_(p.user_id||"")});
-    if(action==="dre") return out_({success:true,data:dre_(p.user_id||"")});
-    if(action==="search") return out_({success:true,data:search_(p.user_id||"",p.q)});
+    if(action==="update") {
+      const sheet=assertSheet_(p.sheet); assertOwned_(sheet,p.id,uid);
+      const data=sheet===TABLES.LANCAMENTOS ? updateTransaction_(uid,p.id,p.record||{}) : update_(sheet,p.id,Object.assign({},p.record||{},{user_id:uid}));
+      audit_(uid,"update",sheet,p.id,data); return out_({success:true,data});
+    }
+    if(action==="upsert") {
+      const sheet=assertSheet_(p.sheet); const existing=p.id ? find_(sheet,p.id) : null;
+      if(existing) assertOwned_(sheet,p.id,uid);
+      const record=Object.assign({},p.record||{},{user_id:uid});
+      const data=existing ? update_(sheet,p.id,record) : upsert_(sheet,p.id,record);
+      audit_(uid,existing?"update":"create",sheet,data.id,data); return out_({success:true,data});
+    }
+    if(action==="delete") {
+      const sheet=assertSheet_(p.sheet); assertOwned_(sheet,p.id,uid); const result=delete_(sheet,p.id); audit_(uid,"delete",sheet,p.id,result); return out_(result);
+    }
+    if(action==="remove_duplicate_categories") return out_({success:true,data:removeDuplicateCategories_(uid)});
+    if(action==="dashboard") return out_({success:true,data:dashboard_(uid)});
+    if(action==="dre") return out_({success:true,data:dre_(uid)});
+    if(action==="search") return out_({success:true,data:search_(uid,p.q)});
     return out_({success:false,error:"Ação não reconhecida."});
   } catch(err) {
-    return out_({success:false,error:String(err.message||err),stack:String(err.stack||"")});
+    return out_({success:false,error:String(err.message||err)});
   }
 }
 

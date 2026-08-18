@@ -1,5 +1,5 @@
 // RELUZ FINANCEIRO — autenticação e banco 100% via Google Sheets + Apps Script.
-const API_URL = "https://script.google.com/macros/s/AKfycbw5dChT6mwGoQ94ebnaQIwNdHnrDnwZDkRCGmm3tNVDl51YqwMExPFhRIeMmZ-p_hYy/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbzE9bJFnzt1JCLOmKjn6m8SmbcknTEEwc2JgdzSyDpw6L9DPV-2Q2EoeUNKu82YXPfM/exec";
 let editingTxId = null;
 let machineRates = [];
 
@@ -15,15 +15,17 @@ async function api(action,payload={}){
   // Autenticação usa GET porque o Google Apps Script redireciona Web Apps
   // e isso evita problemas de CORS/preflight no navegador. As operações
   // de dados continuam usando POST.
-  const isAuth = action === "login" || action === "signup" || action === "health";
+  const isHealth = action === "health";
+  const isAuth = action === "login" || action === "signup";
   let url = API_URL;
-  const options = { method: isAuth ? "GET" : "POST" };
-  if(isAuth){
-    const params = new URLSearchParams({action, ...Object.fromEntries(Object.entries(payload).map(([k,v])=>[k,String(v??"")]))});
+  const options = { method: isHealth ? "GET" : "POST" };
+  if(isHealth){
+    const params = new URLSearchParams({action});
     url += "?" + params.toString();
   }else{
     options.headers={"Content-Type":"text/plain;charset=utf-8"};
-    options.body=JSON.stringify({action,...payload});
+    const token = getSessionToken();
+    options.body=JSON.stringify({action,...payload,...(isAuth?{}:{session_token:token||""})});
   }
   const controller=new AbortController();
   const timeout=setTimeout(()=>controller.abort(),12000);
@@ -40,7 +42,13 @@ async function api(action,payload={}){
   const text=await res.text();
   let data;
   try{data=JSON.parse(text)}catch{throw new Error(text||"Resposta inválida do Apps Script.");}
-  if(data?.success===false) throw new Error(data.error||"Erro no Apps Script.");
+  if(data?.success===false){
+    const message=data.error||"Erro no Apps Script.";
+    if(/sessão|sessao|acesso negado|usuário não informado|usuario nao informado/i.test(message) && !isAuth){
+      clearSession();
+    }
+    throw new Error(message);
+  }
   return data;
 }
 function apiError(error){console.error("Google Sheets/App Script",error);return {data:null,error};}
@@ -107,24 +115,34 @@ async function sha256(text){
   const hash=await crypto.subtle.digest("SHA-256",data);
   return Array.from(new Uint8Array(hash)).map(b=>b.toString(16).padStart(2,"0")).join("");
 }
-function saveSession(u){localStorage.setItem("reluz_session",JSON.stringify(u));}
+function saveSession(u,token){
+  localStorage.setItem("reluz_session",JSON.stringify(u));
+  if(token) localStorage.setItem("reluz_session_token",String(token));
+}
 function getSessionUser(){try{return JSON.parse(localStorage.getItem("reluz_session")||"null")}catch{return null}}
-function clearSession(){localStorage.removeItem("reluz_session");}
+function getSessionToken(){return localStorage.getItem("reluz_session_token")||""}
+function clearSession(){localStorage.removeItem("reluz_session");localStorage.removeItem("reluz_session_token");}
 const sb={
  from:builder,
  auth:{
-  getSession:async()=>{const u=getSessionUser();return {data:{session:u?{user:u}:null},error:null};},
+  getSession:async()=>{
+    const u=getSessionUser();
+    const token=getSessionToken();
+    if(u && token) return {data:{session:{user:u,session_token:token}},error:null};
+    if(u && !token) clearSession();
+    return {data:{session:null},error:null};
+  },
   signInWithPassword:async({email,password})=>{try{
     const r=await api("login",{email:String(email||"").trim().toLowerCase(),password_hash:await sha256(password)});
     if(!r.data?.user) throw new Error("E-mail ou senha incorretos.");
-    saveSession(r.data.user); return {data:{user:r.data.user,session:{user:r.data.user}},error:null};
+    saveSession(r.data.user,r.data.session_token); return {data:{user:r.data.user,session:{user:r.data.user,session_token:r.data.session_token}},error:null};
   }catch(error){return {data:null,error}}},
   signUp:async({email,password,options})=>{try{
     const cleanEmail=String(email||"").trim().toLowerCase();
     const name=options?.data?.name||cleanEmail.split("@")[0];
     const r=await api("signup",{email:cleanEmail,name,password_hash:await sha256(password)});
     if(!r.data?.user) throw new Error("Não foi possível criar a conta.");
-    saveSession(r.data.user); return {data:{user:r.data.user,session:{user:r.data.user}},error:null};
+    saveSession(r.data.user,r.data.session_token); return {data:{user:r.data.user,session:{user:r.data.user,session_token:r.data.session_token}},error:null};
   }catch(error){return {data:null,error}}},
   signOut:async()=>{clearSession();loginView();},
   onAuthStateChange:(callback)=>{const u=getSessionUser();setTimeout(()=>callback(u?"SIGNED_IN":"SIGNED_OUT",u?{user:u}:null),0);return {unsubscribe(){}};}
