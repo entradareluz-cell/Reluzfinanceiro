@@ -186,8 +186,25 @@ function rows_(sh) {
 
 function recordFromRow_(h,row) {
   const o = {};
-  h.forEach((k,i) => o[k] = row[i] === undefined ? "" : row[i]);
+  h.forEach((k,i) => {
+    let v = row[i] === undefined ? "" : row[i];
+    // Campos estruturados são armazenados como JSON dentro de uma célula.
+    // Isso permite que múltiplas formas de pagamento continuem funcionando
+    // depois de sair do Firebase e passar a usar o Google Sheets.
+    if (k === "payment_parts" && typeof v === "string" && v.trim()) {
+      try { v = JSON.parse(v); } catch (_) {}
+    }
+    o[k] = v;
+  });
   return o;
+}
+
+function cellValue_(v) {
+  if (v === undefined || v === null) return "";
+  if (Array.isArray(v) || (typeof v === "object" && !(v instanceof Date))) {
+    return JSON.stringify(v);
+  }
+  return v;
 }
 
 function list_(sheetName, userId) {
@@ -221,7 +238,7 @@ function create_(sheetName,record) {
   if (!rec.created_at) rec.created_at = now_();
   rec.updated_at = now_();
   const h = ensureForRecord_(sh,rec);
-  sh.appendRow(h.map(k => rec[k] === undefined || rec[k] === null ? "" : rec[k]));
+  sh.appendRow(h.map(k => cellValue_(rec[k])));
   return rec;
 }
 
@@ -235,7 +252,7 @@ function update_(sheetName,id,record) {
     if (String(values[i][idIx]) === String(id)) {
       const current = recordFromRow_(h,values[i]);
       const merged = Object.assign({},current,record||{},{id:id,updated_at:now_()});
-      sh.getRange(i+1,1,1,h.length).setValues([h.map(k => merged[k] === undefined || merged[k] === null ? "" : merged[k])]);
+      sh.getRange(i+1,1,1,h.length).setValues([h.map(k => cellValue_(merged[k]))]);
       return merged;
     }
   }
@@ -356,7 +373,8 @@ function doPost(e) {
     if(action==="setup") return out_(setupDatabase());
     if(action==="list") return out_({success:true,data:list_(p.sheet,p.user_id||"")});
     if(action==="get") return out_({success:true,data:find_(p.sheet,p.id)});
-    if(action==="save_transactions") return out_(Object.assign({success:true}, saveTransactions_(p.user_id||"", p.dedupe_key||"", p.rows||[])));\n    if(action==="create") return out_({success:true,data:create_(p.sheet,p.record||{})});
+    if(action==="save_transactions") return out_(Object.assign({success:true}, saveTransactions_(p.user_id||"", p.dedupe_key||"", p.rows||[])));
+    if(action==="create") return out_({success:true,data:create_(p.sheet,p.record||{})});
     if(action==="update") return out_({success:true,data:update_(p.sheet,p.id,p.record||{})});
     if(action==="upsert") return out_({success:true,data:upsert_(p.sheet,p.id,p.record||{})});
     if(action==="delete") return out_(delete_(p.sheet,p.id));
