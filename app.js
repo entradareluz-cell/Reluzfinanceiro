@@ -1,5 +1,5 @@
 // RELUZ FINANCEIRO — autenticação e banco 100% via Google Sheets + Apps Script.
-const API_URL = "https://script.google.com/macros/s/AKfycbw3bpyb2xDtO_1CeTO3ZnyWVqUfczJHIDWELA2a-9hcFWVJLJQwujvxUNVITeOpiOEP/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbzE9bJFnzt1JCLOmKjn6m8SmbcknTEEwc2JgdzSyDpw6L9DPV-2Q2EoeUNKu82YXPfM/exec";
 let editingTxId = null;
 let machineRates = [];
 
@@ -15,12 +15,11 @@ async function api(action,payload={}){
   // Autenticação usa GET porque o Google Apps Script redireciona Web Apps
   // e isso evita problemas de CORS/preflight no navegador. As operações
   // de dados continuam usando POST.
-  const isHealth = action === "health";
-  const isAuth = action === "login" || action === "signup";
+  const isAuth = action === "login" || action === "signup" || action === "health";
   let url = API_URL;
-  const options = { method: isHealth ? "GET" : "POST" };
-  if(isHealth){
-    const params = new URLSearchParams({action});
+  const options = { method: isAuth ? "GET" : "POST" };
+  if(isAuth){
+    const params = new URLSearchParams({action, ...Object.fromEntries(Object.entries(payload).map(([k,v])=>[k,String(v??"")]))});
     url += "?" + params.toString();
   }else{
     options.headers={"Content-Type":"text/plain;charset=utf-8"};
