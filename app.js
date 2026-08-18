@@ -159,7 +159,38 @@ document.addEventListener("DOMContentLoaded",async()=>{
   }catch(err){console.error(err);loginView();msg("authMsg",friendlyError(err))}
 });
 function loginView(){$("loginView").classList.remove("hidden");$("app").classList.add("hidden")}
-async function start(u){user=u;const r=await getDoc(doc(null,"users",u.uid));$("userName").textContent=r.exists()?r.data().name:(u.displayName||u.email);$("loginView").classList.add("hidden");$("app").classList.remove("hidden");await load();page("dashboard")}
+async function start(u){
+  user=u;
+  setAuthLoading(true,"Preparando seu financeiro...","Login confirmado. Mantendo esta tela enquanto seus dados são carregados.");
+
+  try{
+    setAuthLoading(true,"Conectando ao Google Sheets...","Buscando seu perfil e preparando sua sessão.");
+    const r=await getDoc(doc(null,"users",u.uid));
+    $("userName").textContent=r.exists()?r.data().name:(u.displayName||u.email);
+
+    setAuthLoading(true,"Carregando seus dados...","Categorias, contas, cartões, metas e lançamentos.");
+    await load();
+
+    setAuthLoading(true,"Finalizando...","Organizando o dashboard e preparando sua experiência.");
+    page("dashboard");
+
+    // Pequena pausa para a transição visual não parecer uma troca seca.
+    await new Promise(resolve=>setTimeout(resolve,220));
+
+    $("app").classList.remove("hidden");
+    $("app").classList.add("app-ready");
+    $("loginView").classList.add("auth-exit");
+
+    await new Promise(resolve=>setTimeout(resolve,420));
+
+    $("loginView").classList.add("hidden");
+    $("loginView").classList.remove("auth-exit");
+    setAuthLoading(false);
+  }catch(err){
+    setAuthLoading(false);
+    throw err;
+  }
+}
 function setAuthLoading(on,title="Entrando na sua conta...",text="Conectando ao Google Sheets e carregando seus dados."){
   const overlay=$("authLoading");
   if(overlay){
@@ -187,7 +218,7 @@ async function login(e){
   try{
     const r=await sb.auth.signInWithPassword({email:$("loginEmail").value.trim(),password:$("loginPassword").value});
     if(r.error) throw r.error;
-    setAuthLoading(true,"Carregando seu financeiro...","Login confirmado. Aguarde enquanto seus dados são carregados.");
+    setAuthLoading(true,"Login confirmado...","Agora vamos carregar seu financeiro com segurança.");
     await start(r.data.user);
   }catch(err){
     console.error("Erro ao entrar:",err);
