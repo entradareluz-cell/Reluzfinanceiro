@@ -1,5 +1,5 @@
 // RELUZ FINANCEIRO — autenticação e banco 100% via Google Sheets + Apps Script.
-const API_URL = "https://script.google.com/macros/s/AKfycbzmN3PTZUfie-PvoS1NL8IooXfz3nz57aWHaYDxXCk6ggX0dz98HVasyPeeiwZWlosT/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbzE9bJFnzt1JCLOmKjn6m8SmbcknTEEwc2JgdzSyDpw6L9DPV-2Q2EoeUNKu82YXPfM/exec";
 let editingTxId = null;
 let machineRates = [];
 
@@ -49,7 +49,7 @@ async function addDoc(ref,data){
   const r=await api("create",{sheet:ref.sheet,record:data});
   return {id:r.data?.id,data:r.data};
 }
-async function updateDoc(ref,data){await api("update",{sheet:ref.sheet,id:ref.id,record:data});}
+async function updateDoc(ref,data){await api("update",{sheet:ref.sheet,id:ref.id,user_id:user?.uid||"",record:data});}
 async function deleteDoc(ref){await api("delete",{sheet:ref.sheet,id:ref.id});}
 function serverTimestamp(){return new Date().toISOString();}
 async function getDocs(ref){const r=await api("list",{sheet:ref.sheet});return {docs:(r.data||[]).map(x=>({id:x.id,data:()=>x}))};}
@@ -566,10 +566,35 @@ async function saveTxCore(e){
    }
  }
  const dedupeKey=await sha256(JSON.stringify({user_id:user.uid,type:base.type,total,transaction_date:base.transaction_date,category_id:base.category_id,name:base.name,description:base.description,payment_method:method,status,payment_parts:parts.map(p=>({method:p.method,amount:+p.amount||0,card_id:p.card_id||null,installments:+p.installments||1,fee_percent:+p.fee_percent||0,rate_id:p.rate_id||null}))}));
- const r=await api("save_transactions",{user_id:user.uid,dedupe_key:dedupeKey,rows});
- if(r.error){msg("txMsg",r.error?.message||"Não foi possível salvar o lançamento.");return;}
- if(r.duplicate){msg("txMsg","Este lançamento já foi salvo. A duplicidade foi bloqueada.");return;}
- msg("txMsg","Lançamento salvo.");clearTxForm();await load()
+ let r;
+ // Formas múltiplas/parciais usam a estrutura própria do Apps Script:
+ // LANCAMENTOS + RECEBIMENTOS + PARCELAS. Isso evita gravar datas/valores
+ // em colunas erradas e preserva cada valor de PIX, dinheiro, cartão etc.
+ if((method==='multiple'||status==='parcial') && parts.length){
+   const transaction={...base, id:g, amount:total, original_amount:total, payment_parts:parts.length};
+   r=await api("save_multiple_payments",{
+     user_id:user.uid,
+     transaction,
+     payments:parts.map(p=>({
+       method:p.method,
+       amount:Number(p.amount)||0,
+       card_id:p.card_id||"",
+       installments:Number(p.installments)||1,
+       fee_percent:Number(p.fee_percent)||0,
+       rate_id:p.rate_id||"",
+       date:$('txPaidDate').value||$('txDate').value||today,
+       notes:''
+     })),
+     dedupe_key:dedupeKey
+   });
+ }else{
+   r=await api("save_transactions",{user_id:user.uid,dedupe_key:dedupeKey,rows});
+ }
+ if(r?.success===false){msg("txMsg",r.error||"Não foi possível salvar o lançamento.");return;}
+ if(r?.duplicate){msg("txMsg","Este lançamento já foi salvo. A duplicidade foi bloqueada.");return;}
+ msg("txMsg", "Lançamento salvo com sucesso.");
+ clearTxForm();
+ await load();
 }
 let savingTx=false;
 async function saveTx(e){

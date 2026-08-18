@@ -1,107 +1,40 @@
-# RELUZ FINANCEIRO — Google Sheets + Apps Script
+# RELUZ FINANCEIRO — MODAL + GOOGLE SHEETS + ID POR E-MAIL
 
-## Arquitetura
+## API Google Apps Script
 
-- Front-end: GitHub Pages
-- Login: **Google Sheets + Google Apps Script**
-- Banco de dados: **Google Sheets**
-- API: Google Apps Script
-- Firebase/Firestore: **não é mais usado pelo sistema**
-- Comprovantes: o campo de anexo continua disponível para referência, mas o upload para Firebase foi removido.
+URL configurada no `app.js`:
 
-## 1. Google Sheets
+https://script.google.com/macros/s/AKfycbzE9bJFnzt1JCLOmKjn6m8SmbcknTEEwc2JgdzSyDpw6L9DPV-2Q2EoeUNKu82YXPfM/exec
 
-Crie uma planilha e abra **Extensões → Apps Script**.
+## Arquivos
 
-Cole o arquivo `Code.gs` deste pacote.
+- `app.js` — frontend, modal de edição e integração com Apps Script.
+- `Code.gs` — API Google Apps Script + Google Sheets.
+- `index.html` — interface.
+- `style.css` — estilos.
+- `deploy.yml` — configuração existente.
 
-Execute a função `setupDatabase` uma vez e autorize o acesso.
+## Correções desta versão
 
-## 2. Publicar o Apps Script
+1. URL da API atualizada para a nova publicação informada.
+2. ID principal do usuário novo passa a ser o e-mail normalizado.
+3. Compatibilidade com usuários antigos: registros que ainda usam o UUID antigo continuam sendo encontrados pelo mesmo e-mail.
+4. Edição de lançamento passa pelo `updateTransaction_` quando a tabela é `LANCAMENTOS`.
+5. Ao editar lançamento com múltiplas formas de pagamento, `RECEBIMENTOS` e `PARCELAS` antigas daquele lançamento são substituídos pelos dados atuais.
+6. `payment_parts` é gravado como JSON na célula do Google Sheets e volta como array para o modal.
+7. Valores de PIX, dinheiro, débito e cartão são tratados como números; datas continuam nos campos de data.
+8. O `user_id` enviado pelo frontend na edição é o e-mail do usuário.
 
-Em **Implantar → Nova implantação**:
+## Publicação
 
-- Tipo: Aplicativo da Web
-- Executar como: Eu
-- Quem tem acesso: Qualquer pessoa
+Publique o `Code.gs` como nova versão do Web App e mantenha o acesso compatível com o uso do frontend. Depois, publique o frontend com o `app.js` deste pacote.
 
-A implantação usada neste pacote é:
+## Teste recomendado
 
-`https://script.google.com/macros/s/AKfycbzmN3PTZUfie-PvoS1NL8IooXfz3nz57aWHaYDxXCk6ggX0dz98HVasyPeeiwZWlosT/exec`
-
-## 3. Inicializar
-
-Depois de publicar, abra:
-
-`.../exec?action=setup`
-
-Isso cria/atualiza as abas do sistema.
-
-## 4. Login
-
-O cadastro e o login agora são feitos diretamente no Apps Script.
-
-- E-mail fica na aba `USUARIOS`.
-- A senha **não é armazenada em texto puro**: o navegador envia um hash SHA-256.
-- A sessão fica somente no navegador (`localStorage`).
-- Não existe mais dependência de Firebase Authentication ou Firestore para entrar no sistema.
-
-## 5. Dados
-
-Principais abas:
-
-- LANCAMENTOS
-- CATEGORIAS
-- CONTAS
-- CARTOES
-- TAXAS
-- PARCELAS
-- RECEBIMENTOS
-- RECORRENTES
-- METAS
-- PEDIDOS
-- CLIENTES
-- FORNECEDORES
-- PROJETOS
-- USUARIOS
-
-O Apps Script cria novas colunas automaticamente quando o front-end enviar um campo novo.
-
-## 6. Funcionalidades preservadas
-
-- Login/cadastro
-- Lançamentos
-- Categorias
-- Contas
-- Cartões
-- Taxas de maquininha
-- Múltiplas formas de pagamento
-- Pagamento parcial
-- Parcelamento
-- Parcelas futuras
-- Pedido/metal
-- Valor do metal
-- KG inicial/final
-- DRE
-- Dashboard
-- Metas
-- Recorrentes
-- Relatórios
-- Busca
-- PDF/Excel
-- Edição de lançamento
-
-## Segurança
-
-A API do Apps Script é pública para permitir o funcionamento do GitHub Pages. Por isso, a autenticação do usuário é feita no Apps Script e as senhas são armazenadas apenas como hash SHA-256 na aba `USUARIOS`.
-
-Para um ambiente com vários usuários e dados altamente sensíveis, recomenda-se adicionar autenticação por token no Apps Script posteriormente.
-
-
-## Correção de duplicidade de lançamentos
-
-A versão atual adiciona proteção de idempotência ao salvamento de lançamentos. O botão de salvar fica bloqueado durante o envio e o Apps Script usa uma chave de segurança (`dedupe_key`) para impedir que o mesmo lançamento seja gravado novamente por duplo clique, reenvio ou repetição da requisição.
-
-A funcionalidade de múltiplas formas de pagamento, parcelamento e pagamento parcial foi preservada.
-
-Após atualizar o GitHub, publique uma nova versão do `Code.gs` na mesma implantação do Google Apps Script.
+- Login no computador A.
+- Login no computador B com o mesmo e-mail.
+- Criar lançamento simples.
+- Criar lançamento PIX + dinheiro + cartão.
+- Conferir `LANCAMENTOS`, `RECEBIMENTOS` e `PARCELAS`.
+- Editar o lançamento e alterar valor/data/formas.
+- Reabrir o lançamento e confirmar os dados.

@@ -61,9 +61,36 @@ function ss_() {
 function now_() {
   return Utilities.formatDate(new Date(), CONFIG.TIMEZONE, "yyyy-MM-dd HH:mm:ss");
 }
+function today_() {
+  return Utilities.formatDate(new Date(), CONFIG.TIMEZONE, "yyyy-MM-dd");
+}
 
 function id_() {
   return Utilities.getUuid();
+}
+
+// Identidade principal do usuário: o e-mail normalizado.
+// Mantemos UUID como fallback para registros que não pertencem a usuário.
+function userId_(email) {
+  const clean = normalizeEmail_(email);
+  return clean || id_();
+}
+
+function userKeys_(userId) {
+  const uid = String(userId || '').trim();
+  if (!uid) return [];
+  const keys = [uid];
+  // Compatibilidade com contas antigas cujo id ainda era UUID.
+  try {
+    const u = findUserByEmail_(uid);
+    if (u) {
+      const legacy = String(u.id || '').trim();
+      const email = normalizeEmail_(u.email);
+      if (email && !keys.includes(email)) keys.push(email);
+      if (legacy && !keys.includes(legacy)) keys.push(legacy);
+    }
+  } catch (e) {}
+  return keys;
 }
 
 
@@ -77,7 +104,7 @@ function findUserByEmail_(email) {
 function publicUser_(u) {
   if (!u) return null;
   return {
-    uid: String(u.id || u.user_id || ""),
+    uid: normalizeEmail_(u.email) || String(u.id || u.user_id || ""),
     displayName: String(u.name || ""),
     email: String(u.email || ""),
     perfil: String(u.perfil || "usuario"),
@@ -101,7 +128,7 @@ function signup_(email, name, passwordHash) {
   if (!clean || !clean.includes("@")) throw new Error("E-mail inválido.");
   if (!passwordHash) throw new Error("Senha obrigatória.");
   if (findUserByEmail_(clean)) throw new Error("Este e-mail já está cadastrado.");
-  const uid = id_();
+  const uid = userId_(clean);
   const user = create_(TABLES.USUARIOS, {
     id: uid,
     user_id: uid,
@@ -215,7 +242,7 @@ function list_(sheetName, userId) {
   return values.slice(1)
     .filter(r => r.some(v => v !== ""))
     .map(r => recordFromRow_(h,r))
-    .filter(r => !userId || !("user_id" in r) || String(r.user_id) === String(userId));
+    .filter(r => !userId || !("user_id" in r) || userKeys_(userId).some(k => String(r.user_id) === String(k)));
 }
 
 function find_(sheetName,id) {
@@ -234,6 +261,7 @@ function find_(sheetName,id) {
 function create_(sheetName,record) {
   const sh = sheet_(sheetName);
   const rec = Object.assign({}, record || {});
+  if (rec.user_id) rec.user_id = normalizeEmail_(rec.user_id) || String(rec.user_id);
   if (!rec.id) rec.id = id_();
   if (!rec.created_at) rec.created_at = now_();
   rec.updated_at = now_();
@@ -349,6 +377,193 @@ function search_(userId,q) {
   return out;
 }
 
+
+function normalizePaymentParts_(parts) {
+  if (Array.isArray(parts)) return parts;
+  if (typeof parts === "string" && parts.trim()) {
+    try {
+      const parsed = JSON.parse(parts);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (_) {}
+  }
+  return [];
+}
+
+function replacePaymentChildren_(userId, transactionId, transaction, payments) {
+  const uid = normalizeEmail_(userId) || String(userId || "");
+  list_(TABLES.RECEBIMENTOS, uid)
+    .filter(r => String(r.lancamento_id) === String(transactionId))
+    .forEach(r => delete_(TABLES.RECEBIMENTOS, r.id));
+  list_(TABLES.PARCELAS, uid)
+    .filter(r => String(r.lancamento_id) === String(transactionId))
+    .forEach(r => delete_(TABLES.PARCELAS, r.id));
+
+  const parts = normalizePaymentParts_(payments);
+  let totalReceived = 0, totalFee = 0;
+  parts.forEach(payment => {
+    const amount = Number(payment.amount) || 0;
+    const feePercent = Number(payment.fee_percent) || 0;
+    const fee = amount * feePercent / 100;
+    totalReceived += amount; totalFee += fee;
+    create_(TABLES.RECEBIMENTOS, {
+      id:id_(), lancamento_id:transactionId, user_id:uid,
+      method:payment.method || payment.payment_method || "", amount:amount,
+      card_id:payment.card_id || "", installments:Number(payment.installments)||1,
+      fee_percent:feePercent, fee_value:fee, net_amount:amount-fee,
+      rate_id:payment.rate_id || "", date:payment.date || transaction.transaction_date || today_(),
+      notes:payment.notes || "", created_at:now_()
+    });
+    const totalInstallments = Math.max(1, Number(payment.installments)||1);
+    if (totalInstallments > 1) {
+      const installmentAmount = amount / totalInstallments;
+      for (let i=1;i<=totalInstallments;i++) {
+        const installmentDate = addMonths_(payment.date || transaction.transaction_date || today_(), i-1);
+        create_(TABLES.PARCELAS, {
+          id:id_(), lancamento_id:transactionId, user_id:uid,
+          installment_number:i, installment_total:totalInstallments,
+          transaction_date:installmentDate, competence_date:installmentDate, paid_date:"",
+          amount:installmentAmount, original_amount:installmentAmount,
+          fee_percent:feePercent, payment_fee_total:installmentAmount*feePercent/100,
+          status:"pendente", account_id:payment.account_id || transaction.account_id || "",
+          card_id:payment.card_id || "", created_at:now_(), updated_at:now_()
+        });
+      }
+    }
+  });
+  return {totalReceived,totalFee,parts};
+}
+
+function updateTransaction_(userId, id, record) {
+  const current = find_(TABLES.LANCAMENTOS, id);
+  if (!current) throw new Error("Lançamento não encontrado.");
+  if (current.user_id && !userKeys_(userId).some(k => String(current.user_id) === String(k))) {
+    throw new Error("Lançamento não pertence ao usuário.");
+  }
+  const patch = Object.assign({}, record || {});
+  delete patch.user_id;
+  if (patch.amount !== undefined) patch.amount = Number(patch.amount) || 0;
+  if (patch.original_amount !== undefined) patch.original_amount = Number(patch.original_amount) || 0;
+  if (patch.payment_received_amount !== undefined) patch.payment_received_amount = Number(patch.payment_received_amount) || 0;
+  if (patch.payment_fee_total !== undefined) patch.payment_fee_total = Number(patch.payment_fee_total) || 0;
+  if (patch.transaction_date) patch.transaction_date = dateOnly_(patch.transaction_date);
+  if (patch.competence_date) patch.competence_date = dateOnly_(patch.competence_date);
+  if (patch.paid_date) patch.paid_date = dateOnly_(patch.paid_date);
+
+  const parts = normalizePaymentParts_(patch.payment_parts);
+  if (parts.length) {
+    const child = replacePaymentChildren_(userId, id, Object.assign({}, current, patch), parts);
+    patch.payment_parts = parts;
+    patch.payment_received_amount = child.totalReceived;
+    patch.payment_fee_total = child.totalFee;
+  }
+  return update_(TABLES.LANCAMENTOS, id, patch);
+}
+
+function saveMultiplePayments_(userId, transaction, payments, dedupeKey) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const uid = String(userId || '').trim();
+    if (!uid) throw new Error('Usuário não informado.');
+    if (!Array.isArray(payments) || !payments.length) throw new Error('Nenhuma forma de pagamento informada.');
+    const key = String(dedupeKey || '').trim();
+    if (!key) throw new Error('Chave de segurança não informada.');
+
+    const existing = list_(TABLES.LANCAMENTOS, uid);
+    const duplicate = existing.find(r => String(r.dedupe_key || '') === key);
+    if (duplicate) return {duplicate:true, id:duplicate.id, data:[duplicate]};
+
+    const transactionId = transaction.id || id_();
+    const total = Number(transaction.amount) || 0;
+    if (total <= 0) throw new Error('Valor do lançamento deve ser maior que zero.');
+
+    let totalReceived = 0;
+    let totalFee = 0;
+    payments.forEach(p => {
+      const amount = Number(p.amount) || 0;
+      const feePercent = Number(p.fee_percent) || 0;
+      totalReceived += amount;
+      totalFee += amount * feePercent / 100;
+    });
+
+    const main = create_(TABLES.LANCAMENTOS, Object.assign({}, transaction, {
+      id: transactionId,
+      user_id: uid,
+      amount: total,
+      original_amount: Number(transaction.original_amount || total),
+      payment_parts: payments,
+      payment_received_amount: totalReceived,
+      payment_fee_total: totalFee,
+      dedupe_key: key
+    }));
+
+    const received = [];
+    payments.forEach(payment => {
+      const amount = Number(payment.amount) || 0;
+      const feePercent = Number(payment.fee_percent) || 0;
+      const fee = amount * feePercent / 100;
+      received.push(create_(TABLES.RECEBIMENTOS, {
+        id:id_(),
+        lancamento_id:transactionId,
+        user_id:uid,
+        method:payment.method || payment.payment_method || '',
+        amount:amount,
+        card_id:payment.card_id || '',
+        installments:Number(payment.installments) || 1,
+        fee_percent:feePercent,
+        fee_value:fee,
+        net_amount:amount-fee,
+        rate_id:payment.rate_id || '',
+        date:payment.date || transaction.transaction_date || '',
+        notes:payment.notes || '',
+        created_at:now_()
+      }));
+    });
+
+    const installments = [];
+    payments.forEach(payment => {
+      const totalInstallments = Math.max(1, Number(payment.installments) || 1);
+      if (totalInstallments <= 1) return;
+      const amount = Number(payment.amount) || 0;
+      const installmentAmount = amount / totalInstallments;
+      const feePercent = Number(payment.fee_percent) || 0;
+      for (let i=1; i<=totalInstallments; i++) {
+        const installmentDate = addMonths_(payment.date || transaction.transaction_date || now_(), i-1);
+        installments.push(create_(TABLES.PARCELAS, {
+          id:id_(),
+          lancamento_id:transactionId,
+          user_id:uid,
+          installment_number:i,
+          installment_total:totalInstallments,
+          transaction_date:installmentDate,
+          competence_date:installmentDate,
+          paid_date:'',
+          amount:installmentAmount,
+          original_amount:installmentAmount,
+          fee_percent:feePercent,
+          payment_fee_total:installmentAmount*feePercent/100,
+          status:'pendente',
+          account_id:payment.account_id || transaction.account_id || '',
+          card_id:payment.card_id || '',
+          created_at:now_(),
+          updated_at:now_()
+        }));
+      }
+    });
+
+    return {duplicate:false, transaction:main, recebimentos:received, parcelas:installments};
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function addMonths_(dateValue, months) {
+  const d = new Date(dateValue);
+  if (isNaN(d.getTime())) return now_();
+  d.setMonth(d.getMonth() + Number(months || 0));
+  return Utilities.formatDate(d, CONFIG.TIMEZONE, 'yyyy-MM-dd');
+}
+
 function doGet(e) {
   try {
     const p=input_(e), action=p.action||"health";
@@ -374,8 +589,14 @@ function doPost(e) {
     if(action==="list") return out_({success:true,data:list_(p.sheet,p.user_id||"")});
     if(action==="get") return out_({success:true,data:find_(p.sheet,p.id)});
     if(action==="save_transactions") return out_(Object.assign({success:true}, saveTransactions_(p.user_id||"", p.dedupe_key||"", p.rows||[])));
+    if(action==="save_multiple_payments") return out_(Object.assign({success:true}, saveMultiplePayments_(p.user_id||"", p.transaction||{}, p.payments||[], p.dedupe_key||"")));
     if(action==="create") return out_({success:true,data:create_(p.sheet,p.record||{})});
-    if(action==="update") return out_({success:true,data:update_(p.sheet,p.id,p.record||{})});
+    if(action==="update") {
+      if (String(p.sheet||"").toUpperCase() === TABLES.LANCAMENTOS) {
+        return out_({success:true,data:updateTransaction_(p.user_id||"",p.id,p.record||{})});
+      }
+      return out_({success:true,data:update_(p.sheet,p.id,p.record||{})});
+    }
     if(action==="upsert") return out_({success:true,data:upsert_(p.sheet,p.id,p.record||{})});
     if(action==="delete") return out_(delete_(p.sheet,p.id));
     if(action==="remove_duplicate_categories") return out_({success:true,data:removeDuplicateCategories_(p.user_id||"")});

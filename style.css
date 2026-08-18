@@ -115,3 +115,30 @@ header{height:72px!important;padding:0 26px!important;position:sticky;top:0;z-in
 
 /* Modal exclusivo para edição de lançamentos */
 .edit-tx-modal{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;padding:22px}.edit-tx-modal.hidden{display:none}.edit-tx-backdrop{position:absolute;inset:0;background:rgba(4,8,18,.72);backdrop-filter:blur(7px)}.edit-tx-dialog{position:relative;width:min(1180px,96vw);max-height:92vh;overflow:auto;border:1px solid rgba(255,255,255,.12);border-radius:22px;background:var(--panel,#101522);box-shadow:0 30px 100px rgba(0,0,0,.45);padding:22px}.edit-tx-header{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;margin-bottom:16px}.edit-tx-header h2{margin:4px 0}.edit-tx-header p{margin:0;opacity:.7}.edit-tx-dialog #txForm{margin:0}.edit-tx-dialog #txForm+.edit-tx-actions{position:sticky;bottom:0}.edit-tx-dialog #txMsg{margin-bottom:0}.edit-tx-dialog .card{box-shadow:none;border:0;padding:0;background:transparent}.edit-tx-dialog form.grid{padding-bottom:4px}.edit-tx-dialog form.grid>button[type=submit]{position:sticky;bottom:0;z-index:2;box-shadow:0 -12px 24px rgba(0,0,0,.18)}body.edit-modal-open{overflow:hidden}
+
+/* ===== MODAL DE EDIÇÃO — acabamento profissional ===== */
+.edit-tx-modal{padding:18px;background:rgba(6,13,26,.38)}
+.edit-tx-dialog{width:min(1120px,96vw);max-height:94vh;padding:0!important;overflow:hidden!important;border:1px solid #dbe5f1!important;border-radius:24px!important;background:#f7faff!important;color:#18304f!important;box-shadow:0 35px 100px rgba(11,35,66,.30)!important}
+.edit-tx-header{padding:22px 26px 18px!important;margin:0!important;background:linear-gradient(135deg,#0d2342,#174f91)!important;color:#fff;border-bottom:1px solid rgba(255,255,255,.12)}
+.edit-tx-header h2{font-size:22px!important;letter-spacing:-.4px;color:#fff!important;margin:2px 0 5px!important}
+.edit-tx-header p{font-size:11px!important;color:rgba(255,255,255,.72)!important}
+.edit-tx-header .secondary,.edit-tx-header button{border:1px solid rgba(255,255,255,.22)!important;background:rgba(255,255,255,.10)!important;color:#fff!important;border-radius:10px!important}
+#editTxHost{max-height:calc(94vh - 92px);overflow:auto;padding:22px 26px 28px}
+.edit-tx-dialog #txForm{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:12px;margin:0!important;padding:0!important}
+.edit-tx-dialog #txForm>label{grid-column:span 4;background:#fff;border:1px solid #e2e9f2;border-radius:13px;padding:10px 12px;box-shadow:0 3px 12px rgba(29,62,101,.035)}
+.edit-tx-dialog #txForm>label.wide{grid-column:span 12}
+.edit-tx-dialog #txForm>label:nth-of-type(1),.edit-tx-dialog #txForm>label:nth-of-type(2),.edit-tx-dialog #txForm>label:nth-of-type(3){grid-column:span 4}
+.edit-tx-dialog #txForm input,.edit-tx-dialog #txForm select,.edit-tx-dialog #txForm textarea{margin-top:6px;border-color:#d8e2ed;background:#fbfdff;color:#18304f;border-radius:9px}
+.edit-tx-dialog #txForm textarea{min-height:82px}
+.edit-tx-dialog .payment-breakdown{grid-column:span 12!important;margin:0;border:1px solid #d9e5f2!important;border-radius:16px!important;background:#fff!important;padding:16px!important;box-shadow:0 6px 20px rgba(29,62,101,.05)!important}
+.edit-tx-dialog .payment-part{border:1px solid #e1e8f0!important;background:#f8fbff!important;border-radius:13px!important;padding:12px!important;margin-top:10px}
+.edit-tx-dialog .part-main-grid{display:grid!important;grid-template-columns:1.1fr 1fr 1fr 1fr .65fr auto;gap:9px;align-items:end}
+.edit-tx-dialog .part-detail{display:grid!important;grid-template-columns:1fr 1fr 1fr;gap:9px;margin-top:9px}
+.edit-tx-dialog .part-schedule{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:7px;margin-top:9px}
+.edit-tx-dialog .part-schedule>div{background:#fff;border:1px solid #e2e9f2;border-radius:9px;padding:8px}
+.edit-tx-dialog .part-schedule span,.edit-tx-dialog .part-schedule small{display:block;color:#7d8da0;font-size:9px}
+.edit-tx-dialog .part-schedule b{display:block;color:#17365f;font-size:11px;margin:3px 0}
+.edit-tx-dialog #txForm>button[type=submit]{grid-column:span 12;position:sticky;bottom:0;z-index:4;margin-top:5px;border:0;border-radius:12px;padding:13px 18px;background:linear-gradient(135deg,#1769ff,#1454c4);color:#fff;font-weight:800;box-shadow:0 -10px 24px rgba(16,48,91,.10)}
+.edit-tx-dialog #txMsg{grid-column:span 12;margin:0;padding:10px 12px;border-radius:10px;font-size:11px}
+@media(max-width:900px){.edit-tx-dialog #txForm>label,.edit-tx-dialog #txForm>label.wide{grid-column:span 6}.edit-tx-dialog .part-main-grid{grid-template-columns:1fr 1fr}.edit-tx-dialog .part-detail{grid-template-columns:1fr 1fr}}
+@media(max-width:600px){.edit-tx-modal{padding:0}.edit-tx-dialog{width:100vw;height:100vh;max-height:100vh;border-radius:0!important}.edit-tx-header{padding:17px}.edit-tx-header h2{font-size:18px!important}#editTxHost{max-height:calc(100vh - 78px);padding:15px}.edit-tx-dialog #txForm>label,.edit-tx-dialog #txForm>label.wide{grid-column:span 12}.edit-tx-dialog .part-main-grid,.edit-tx-dialog .part-detail{grid-template-columns:1fr}.edit-tx-dialog .payment-breakdown{padding:11px!important}}
