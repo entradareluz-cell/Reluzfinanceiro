@@ -12,12 +12,20 @@ const TABLES={
 };
 function sheetName(table){return TABLES[table]||String(table||"").toUpperCase();}
 async function api(action,payload={}){
-  const body={action,...payload};
-  const res=await fetch(API_URL,{
-    method:"POST",
-    headers:{"Content-Type":"text/plain;charset=utf-8"},
-    body:JSON.stringify(body)
-  });
+  // Autenticação usa GET porque o Google Apps Script redireciona Web Apps
+  // e isso evita problemas de CORS/preflight no navegador. As operações
+  // de dados continuam usando POST.
+  const isAuth = action === "login" || action === "signup" || action === "health";
+  let url = API_URL;
+  const options = { method: isAuth ? "GET" : "POST" };
+  if(isAuth){
+    const params = new URLSearchParams({action, ...Object.fromEntries(Object.entries(payload).map(([k,v])=>[k,String(v??"")]))});
+    url += "?" + params.toString();
+  }else{
+    options.headers={"Content-Type":"text/plain;charset=utf-8"};
+    options.body=JSON.stringify({action,...payload});
+  }
+  const res=await fetch(url,options);
   const text=await res.text();
   let data;
   try{data=JSON.parse(text)}catch{throw new Error(text||"Resposta inválida do Apps Script.");}
