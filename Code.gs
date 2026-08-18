@@ -61,6 +61,11 @@ function ss_() {
 function now_() {
   return Utilities.formatDate(new Date(), CONFIG.TIMEZONE, "yyyy-MM-dd HH:mm:ss");
 }
+
+function normalizeEmail_(email) {
+  return String(email || "").trim().toLowerCase();
+}
+
 function today_() {
   return Utilities.formatDate(new Date(), CONFIG.TIMEZONE, "yyyy-MM-dd");
 }
