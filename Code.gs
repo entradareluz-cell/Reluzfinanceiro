@@ -4,8 +4,7 @@
  * Google Sheets + Google Apps Script API
  *
  * A planilha é o banco de dados.
- * A autenticação é feita por sessão assinada pelo Apps Script.
- * O navegador nunca define sozinho o usuário autorizado.
+ * O Firebase Authentication continua sendo usado somente para login.
  */
 
 const CONFIG = {
@@ -83,76 +82,6 @@ function dateOnly_(value) {
 
 function id_() {
   return Utilities.getUuid();
-}
-
-function authSecret_() {
-  const props = PropertiesService.getScriptProperties();
-  let secret = props.getProperty("RELUZ_AUTH_SECRET");
-  if (!secret) {
-    secret = Utilities.getUuid() + Utilities.getUuid() + Utilities.getUuid();
-    props.setProperty("RELUZ_AUTH_SECRET", secret);
-  }
-  return secret;
-}
-
-function base64UrlEncode_(text) {
-  return Utilities.base64EncodeWebSafe(Utilities.newBlob(String(text)).getBytes()).replace(/=+$/g, "");
-}
-
-function base64UrlDecode_(text) {
-  const padded = String(text || "") + "=".repeat((4 - (String(text || "").length % 4)) % 4);
-  return Utilities.newBlob(Utilities.base64DecodeWebSafe(padded)).getDataAsString();
-}
-
-function signToken_(payloadText) {
-  const sig = Utilities.computeHmacSha256Signature(payloadText, authSecret_());
-  return Utilities.base64EncodeWebSafe(sig).replace(/=+$/g, "");
-}
-
-function createSessionToken_(user) {
-  const payload = {
-    uid: normalizeEmail_(user.email) || String(user.id || ""),
-    email: normalizeEmail_(user.email),
-    perfil: String(user.perfil || "usuario"),
-    exp: Date.now() + 1000 * 60 * 60 * 24 * 7
-  };
-  const encoded = base64UrlEncode_(JSON.stringify(payload));
-  return encoded + "." + signToken_(encoded);
-}
-
-function verifySession_(token) {
-  const raw = String(token || "").trim();
-  if (!raw || !raw.includes(".")) throw new Error("Sessão inválida ou expirada. Faça login novamente.");
-  const parts = raw.split(".");
-  if (parts.length !== 2) throw new Error("Sessão inválida. Faça login novamente.");
-  const encoded = parts[0], signature = parts[1];
-  if (signToken_(encoded) !== signature) throw new Error("Sessão inválida. Faça login novamente.");
-  let payload;
-  try { payload = JSON.parse(base64UrlDecode_(encoded)); } catch (_) { throw new Error("Sessão inválida. Faça login novamente."); }
-  if (!payload.uid || !payload.email || Number(payload.exp || 0) < Date.now()) throw new Error("Sessão expirada. Faça login novamente.");
-  const u = findUserByEmail_(payload.email);
-  if (!u || u.ativo === false || String(u.ativo).toLowerCase() === "false") throw new Error("Usuário inativo ou inexistente.");
-  return { uid: normalizeEmail_(u.email) || String(u.id || ""), email: normalizeEmail_(u.email), perfil: String(u.perfil || "usuario") };
-}
-
-function requireAuth_(p) {
-  return verifySession_(p && p.session_token);
-}
-
-function assertSheet_(sheetName) {
-  const name = String(sheetName || "").trim().toUpperCase();
-  if (!Object.values(TABLES).includes(name)) throw new Error("Tabela não autorizada.");
-  return name;
-}
-
-function assertOwned_(sheetName, id, userId) {
-  const name = assertSheet_(sheetName);
-  const record = find_(name, id);
-  if (!record) throw new Error("Registro não encontrado.");
-  if (!record.user_id || !userKeys_(userId).some(k => String(record.user_id) === String(k))) {
-    throw new Error("Acesso negado ao registro.");
-  }
-  return record;
 }
 
 // Identidade principal do usuário: o e-mail normalizado.
@@ -328,31 +257,7 @@ function list_(sheetName, userId) {
   return values.slice(1)
     .filter(r => r.some(v => v !== ""))
     .map(r => recordFromRow_(h,r))
-    .filter(r => {
-      if (!userId) return true;
-      return ("user_id" in r) && userKeys_(userId).some(k => String(r.user_id) === String(k));
-    });
-}
-
-function listOwned_(sheetName, userId) {
-  const name = assertSheet_(sheetName);
-  return list_(name, userId);
-}
-
-function audit_(userId, action, tableName, recordId, data) {
-  try {
-    create_(TABLES.AUDITORIA, {
-      id: id_(),
-      user_id: normalizeEmail_(userId) || String(userId || ""),
-      action: String(action || ""),
-      table_name: String(tableName || ""),
-      record_id: String(recordId || ""),
-      data: data || {},
-      date: now_()
-    });
-  } catch (e) {
-    console.error("Falha ao registrar auditoria", e);
-  }
+    .filter(r => !userId || !("user_id" in r) || userKeys_(userId).some(k => String(r.user_id) === String(k)));
 }
 
 function find_(sheetName,id) {
@@ -449,7 +354,7 @@ function dashboard_(userId) {
   const tx=list_(TABLES.LANCAMENTOS,userId);
   let entradas=0,saidas=0;
   tx.forEach(t=>{
-    const v=Number(t.amount)||0;
+    const v=Math.abs(Number(t.amount)||0);
     if(["entrada","income","receita"].includes(String(t.type||"").toLowerCase())) entradas+=v;
     if(["saida","expense","despesa"].includes(String(t.type||"").toLowerCase())) saidas+=v;
   });
@@ -566,7 +471,8 @@ function updateTransaction_(userId, id, record) {
     patch.payment_parts = parts;
     patch.payment_received_amount = child.totalReceived;
     patch.payment_fee_total = child.totalFee;
-    patch.remaining_amount = Math.max(0, Number(patch.original_amount || current.original_amount || patch.amount || current.amount || 0) - child.totalReceived);
+    const original = Number(patch.original_amount || current.original_amount || patch.amount || current.amount || 0) || 0;
+    patch.remaining_amount = Math.max(0, original - child.totalReceived);
     if (patch.status === undefined || patch.status === "") patch.status = patch.remaining_amount > 0 ? "parcial" : "pago";
   }
   return update_(TABLES.LANCAMENTOS, id, patch);
@@ -594,14 +500,14 @@ function saveMultiplePayments_(userId, transaction, payments, dedupeKey) {
     let totalFee = 0;
     payments.forEach(p => {
       const amount = Number(p.amount) || 0;
-      if (amount < 0) throw new Error('Valor de pagamento não pode ser negativo.');
+      if (amount < 0) throw new Error("Valor de pagamento não pode ser negativo.");
       const feePercent = Number(p.fee_percent) || 0;
       totalReceived += amount;
       totalFee += amount * feePercent / 100;
     });
-    if (totalReceived > total) throw new Error('A soma dos pagamentos não pode ultrapassar o valor do lançamento.');
-    const remainingAmount = Math.max(0, total - totalReceived);
 
+    if (totalReceived > total) throw new Error("A soma dos pagamentos não pode ultrapassar o valor do lançamento.");
+    const remainingAmount = Math.max(0, total - totalReceived);
     const main = create_(TABLES.LANCAMENTOS, Object.assign({}, transaction, {
       id: transactionId,
       user_id: uid,
@@ -611,7 +517,7 @@ function saveMultiplePayments_(userId, transaction, payments, dedupeKey) {
       payment_received_amount: totalReceived,
       payment_fee_total: totalFee,
       remaining_amount: remainingAmount,
-      status: transaction.status || (remainingAmount > 0 ? 'parcial' : 'pago'),
+      status: transaction.status || (remainingAmount > 0 ? "parcial" : "pago"),
       dedupe_key: key
     }));
 
@@ -682,75 +588,182 @@ function addMonths_(dateValue, months) {
   return Utilities.formatDate(d, CONFIG.TIMEZONE, 'yyyy-MM-dd');
 }
 
+
+/* ===== SEGURANÇA ETAPA 2 — integração incremental ===== */
+function authSecret_() {
+  const props = PropertiesService.getScriptProperties();
+  let secret = props.getProperty("RELUZ_AUTH_SECRET");
+  if (!secret) {
+    secret = Utilities.getUuid() + Utilities.getUuid() + Utilities.getUuid();
+    props.setProperty("RELUZ_AUTH_SECRET", secret);
+  }
+  return secret;
+}
+function b64e_(text) {
+  return Utilities.base64EncodeWebSafe(Utilities.newBlob(String(text)).getBytes()).replace(/=+$/g,"");
+}
+function b64d_(text) {
+  const s=String(text||"");
+  const pad=s+"=".repeat((4-(s.length%4))%4);
+  return Utilities.newBlob(Utilities.base64DecodeWebSafe(pad)).getDataAsString();
+}
+function sign_(text) {
+  return Utilities.base64EncodeWebSafe(
+    Utilities.computeHmacSha256Signature(String(text), authSecret_())
+  ).replace(/=+$/g,"");
+}
+function createSessionToken_(user) {
+  const payload={
+    uid: normalizeEmail_(user.email) || String(user.id||""),
+    email: normalizeEmail_(user.email),
+    perfil: String(user.perfil||"usuario"),
+    exp: Date.now()+7*24*60*60*1000
+  };
+  const body=b64e_(JSON.stringify(payload));
+  return body+"."+sign_(body);
+}
+function verifySession_(token) {
+  const raw=String(token||"").trim();
+  if(!raw) throw new Error("Sessão ausente. Faça login novamente.");
+  const p=raw.split(".");
+  if(p.length!==2 || sign_(p[0])!==p[1]) throw new Error("Sessão inválida. Faça login novamente.");
+  let payload;
+  try { payload=JSON.parse(b64d_(p[0])); } catch(e) { throw new Error("Sessão inválida. Faça login novamente."); }
+  if(!payload.email || !payload.uid || Number(payload.exp||0)<Date.now()) throw new Error("Sessão expirada. Faça login novamente.");
+  const u=findUserByEmail_(payload.email);
+  if(!u || String(u.ativo).toLowerCase()==="false") throw new Error("Usuário inativo ou inexistente.");
+  return {uid:normalizeEmail_(u.email)||String(u.id||""),email:normalizeEmail_(u.email),perfil:String(u.perfil||"usuario")};
+}
+function requireAuth_(p){ return verifySession_(p && p.session_token); }
+function assertSheet_(sheetName){
+  const n=String(sheetName||"").trim().toUpperCase();
+  if(!Object.values(TABLES).includes(n)) throw new Error("Tabela não autorizada.");
+  return n;
+}
+function assertOwned_(sheetName,id,uid){
+  const n=assertSheet_(sheetName);
+  const r=find_(n,id);
+  if(!r) throw new Error("Registro não encontrado.");
+  if(!r.user_id || !userKeys_(uid).some(k=>String(r.user_id)===String(k))) throw new Error("Acesso negado ao registro.");
+  return r;
+}
+function assertWritable_(sheetName,auth){
+  const n=assertSheet_(sheetName);
+  if([TABLES.USUARIOS,TABLES.AUDITORIA].includes(n) && String(auth.perfil).toLowerCase()!=="admin")
+    throw new Error("Esta tabela é protegida.");
+  return n;
+}
+function audit_(uid,action,tableName,recordId,data){
+  try{
+    create_(TABLES.AUDITORIA,{
+      id:id_(), user_id:normalizeEmail_(uid)||String(uid||""),
+      action:String(action||""), table_name:String(tableName||""),
+      record_id:String(recordId||""), data:JSON.stringify(data||{}), date:now_()
+    });
+  }catch(e){ console.error("Falha na auditoria:",e); }
+}
+function hasAnyUser_(){
+  try { return list_(TABLES.USUARIOS,"").length>0; } catch(e) { return false; }
+}
+function setupAuthorized_(auth){
+  if(auth && String(auth.perfil||"").toLowerCase()==="admin") return true;
+  return !hasAnyUser_();
+}
+/* ===== FIM SEGURANÇA ===== */
+
 function doGet(e) {
   try {
     const p=input_(e), action=p.action||"health";
     if(action==="health") return out_({success:true,message:"RELUZ FINANCEIRO API — Google Sheets funcionando.",time:now_()});
-    if(action==="login") { const user=login_(p.email,p.password_hash); return out_({success:true,data:{user,session_token:createSessionToken_(user)}}); }
-    if(action==="signup") { const user=signup_(p.email,p.name,p.password_hash); return out_({success:true,data:{user,session_token:createSessionToken_(user)}}); }
-    const auth=requireAuth_(p);
-    if(action==="list") return out_({success:true,data:listOwned_(p.sheet,auth.uid)});
-    if(action==="get") return out_({success:true,data:assertOwned_(p.sheet,p.id,auth.uid)});
-    if(action==="dashboard") return out_({success:true,data:dashboard_(auth.uid)});
-    if(action==="dre") return out_({success:true,data:dre_(auth.uid)});
-    if(action==="search") return out_({success:true,data:search_(auth.uid,p.q)});
+    if(action==="login"){
+      const user=login_(p.email,p.password_hash);
+      return out_({success:true,data:{user,session_token:createSessionToken_(user)}});
+    }
+    if(action==="signup"){
+      const user=signup_(p.email,p.name,p.password_hash);
+      return out_({success:true,data:{user,session_token:createSessionToken_(user)}});
+    }
+    const auth=requireAuth_(p), uid=auth.uid;
+    if(action==="list") return out_({success:true,data:list_(p.sheet,uid)});
+    if(action==="get") return out_({success:true,data:assertOwned_(p.sheet,p.id,uid)});
+    if(action==="dashboard") return out_({success:true,data:dashboard_(uid)});
+    if(action==="dre") return out_({success:true,data:dre_(uid)});
+    if(action==="search") return out_({success:true,data:search_(uid,p.q)});
     return out_({success:false,error:"Ação não reconhecida."});
   } catch(err) { return out_({success:false,error:String(err.message||err)}); }
-}
-
-function assertClientWritable_(sheetName, auth) {
-  const name = assertSheet_(sheetName);
-  const blocked = [TABLES.USUARIOS, TABLES.AUDITORIA];
-  if (blocked.includes(name) && String(auth.perfil || "usuario").toLowerCase() !== "admin") {
-    throw new Error("Esta tabela é protegida e não pode ser alterada pelo usuário.");
-  }
-  return name;
 }
 
 function doPost(e) {
   try {
     const p=input_(e), action=p.action;
-    if(action==="login") { const user=login_(p.email,p.password_hash); return out_({success:true,data:{user,session_token:createSessionToken_(user)}}); }
-    if(action==="signup") { const user=signup_(p.email,p.name,p.password_hash); return out_({success:true,data:{user,session_token:createSessionToken_(user)}}); }
     if(action==="health") return out_({success:true,message:"RELUZ FINANCEIRO API — Google Sheets funcionando.",time:now_()});
+    if(action==="login"){
+      const user=login_(p.email,p.password_hash);
+      return out_({success:true,data:{user,session_token:createSessionToken_(user)}});
+    }
+    if(action==="signup"){
+      const user=signup_(p.email,p.name,p.password_hash);
+      return out_({success:true,data:{user,session_token:createSessionToken_(user)}});
+    }
 
-    const auth=requireAuth_(p);
-    const uid=auth.uid;
-    if(action==="setup") { if(auth.perfil!=="admin") throw new Error("Apenas administradores podem inicializar o banco."); return out_(setupDatabase()); }
-    if(action==="list") return out_({success:true,data:listOwned_(p.sheet,uid)});
+    const auth=requireAuth_(p), uid=auth.uid;
+
+    if(action==="setup"){
+      if(!setupAuthorized_(auth)) throw new Error("Apenas administradores podem inicializar/atualizar o banco.");
+      return out_(setupDatabase());
+    }
+    if(action==="list") return out_({success:true,data:list_(p.sheet,uid)});
     if(action==="get") return out_({success:true,data:assertOwned_(p.sheet,p.id,uid)});
-    if(action==="save_transaction") return out_({success:true, data:saveTransaction_(uid, p.record||{}, p.dedupe_key||"")});
-    if(action==="save_transactions") return out_(Object.assign({success:true}, saveTransactions_(uid, p.dedupe_key||"", p.rows||[])));
-    if(action==="save_multiple_payments") return out_(Object.assign({success:true}, saveMultiplePayments_(uid, p.transaction||{}, p.payments||[], p.dedupe_key||"")));
-    if(action==="create") {
-      const sheet=assertClientWritable_(p.sheet,auth); const record=Object.assign({},p.record||{}, {user_id:uid}); delete record.id;
-      const created=create_(sheet,record); audit_(uid,"create",sheet,created.id,created); return out_({success:true,data:created});
+    if(action==="save_transaction") return out_({success:true,data:saveTransaction_(uid,p.record||{},p.dedupe_key||"")});
+    if(action==="save_transactions") return out_(Object.assign({success:true},saveTransactions_(uid,p.dedupe_key||"",p.rows||[])));
+    if(action==="save_multiple_payments") return out_(Object.assign({success:true},saveMultiplePayments_(uid,p.transaction||{},p.payments||[],p.dedupe_key||"")));
+
+    if(action==="create"){
+      const sheet=assertWritable_(p.sheet,auth);
+      const record=Object.assign({},p.record||{},{user_id:uid}); delete record.id;
+      const created=create_(sheet,record);
+      audit_(uid,"create",sheet,created.id,created);
+      return out_({success:true,data:created});
     }
-    if(action==="update") {
-      const sheet=assertClientWritable_(p.sheet,auth); assertOwned_(sheet,p.id,uid);
-      const data=sheet===TABLES.LANCAMENTOS ? updateTransaction_(uid,p.id,p.record||{}) : update_(sheet,p.id,Object.assign({},p.record||{},{user_id:uid}));
-      audit_(uid,"update",sheet,p.id,data); return out_({success:true,data});
+    if(action==="update"){
+      const sheet=assertWritable_(p.sheet,auth);
+      assertOwned_(sheet,p.id,uid);
+      const data=sheet===TABLES.LANCAMENTOS
+        ? updateTransaction_(uid,p.id,p.record||{})
+        : update_(sheet,p.id,Object.assign({},p.record||{},{user_id:uid}));
+      audit_(uid,"update",sheet,p.id,data);
+      return out_({success:true,data});
     }
-    if(action==="upsert") {
-      const sheet=assertClientWritable_(p.sheet,auth); const existing=p.id ? find_(sheet,p.id) : null;
+    if(action==="upsert"){
+      const sheet=assertWritable_(p.sheet,auth);
+      const existing=p.id?find_(sheet,p.id):null;
       if(existing) assertOwned_(sheet,p.id,uid);
       const record=Object.assign({},p.record||{},{user_id:uid});
-      const data=existing ? update_(sheet,p.id,record) : upsert_(sheet,p.id,record);
-      audit_(uid,existing?"update":"create",sheet,data.id,data); return out_({success:true,data});
+      const data=existing?update_(sheet,p.id,record):upsert_(sheet,p.id,record);
+      audit_(uid,existing?"update":"create",sheet,data.id,data);
+      return out_({success:true,data});
     }
-    if(action==="delete") {
-      const sheet=assertClientWritable_(p.sheet,auth); assertOwned_(sheet,p.id,uid); const result=delete_(sheet,p.id); audit_(uid,"delete",sheet,p.id,result); return out_(result);
+    if(action==="delete"){
+      const sheet=assertWritable_(p.sheet,auth);
+      assertOwned_(sheet,p.id,uid);
+      const result=delete_(sheet,p.id);
+      audit_(uid,"delete",sheet,p.id,result);
+      return out_(result);
     }
-    if(action==="remove_duplicate_categories") return out_({success:true,data:removeDuplicateCategories_(uid)});
-    if(action==="dashboard") return out_({success:true,data:dashboard_(uid)});
-    if(action==="dre") return out_({success:true,data:dre_(uid)});
-    if(action==="search") return out_({success:true,data:search_(uid,p.q)});
+    if(action==="remove_duplicate_categories")
+      return out_({success:true,data:removeDuplicateCategories_(uid)});
+    if(action==="dashboard")
+      return out_({success:true,data:dashboard_(uid)});
+    if(action==="dre")
+      return out_({success:true,data:dre_(uid)});
+    if(action==="search")
+      return out_({success:true,data:search_(uid,p.q)});
+
     return out_({success:false,error:"Ação não reconhecida."});
   } catch(err) {
     return out_({success:false,error:String(err.message||err)});
   }
 }
-
 
 function saveTransaction_(userId, record, dedupeKey) {
   const lock = LockService.getScriptLock();
@@ -766,6 +779,9 @@ function saveTransaction_(userId, record, dedupeKey) {
     rec.original_amount = Number(rec.original_amount || rec.amount) || 0;
     rec.payment_received_amount = Number(rec.payment_received_amount || 0) || 0;
     rec.payment_fee_total = Number(rec.payment_fee_total || 0) || 0;
+    rec.remaining_amount = Math.max(0, rec.original_amount - rec.payment_received_amount);
+    if (!rec.status) rec.status = rec.remaining_amount > 0 ? "parcial" : "pago";
+    if (rec.payment_received_amount > rec.original_amount) throw new Error("Valor recebido não pode ultrapassar o valor original.");
     if (!rec.amount) throw new Error("Valor do lançamento deve ser maior que zero.");
 
     if (rec.transaction_date) rec.transaction_date = dateOnly_(rec.transaction_date);
@@ -835,7 +851,7 @@ function saveTransactions_(userId, dedupeKey, rows) {
       });
       const item = create_(TABLES.LANCAMENTOS, rec);
       created.push(item);
-      audit_(uid, "create", TABLES.LANCAMENTOS, item.id, item);
+      audit_(uid,"create",TABLES.LANCAMENTOS,item.id,item);
     });
     return {duplicate:false, data:created};
   } finally {
