@@ -2,7 +2,6 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbzE9bJFnzt1JCLOmKjn6m8SmbcknTEEwc2JgdzSyDpw6L9DPV-2Q2EoeUNKu82YXPfM/exec";
 let editingTxId = null;
 let machineRates = [];
-let activeSaveKey = null;
 
 const TABLES={
   transactions:"LANCAMENTOS",categories:"CATEGORIAS",accounts:"CONTAS",cards:"CARTOES",
@@ -16,11 +15,12 @@ async function api(action,payload={}){
   // Autenticação usa GET porque o Google Apps Script redireciona Web Apps
   // e isso evita problemas de CORS/preflight no navegador. As operações
   // de dados continuam usando POST.
-  const isAuth = action === "login" || action === "signup" || action === "health";
+  const isHealth = action === "health";
+  const isAuth = action === "login" || action === "signup";
   let url = API_URL;
-  const options = { method: isAuth ? "GET" : "POST" };
-  if(isAuth){
-    const params = new URLSearchParams({action, ...Object.fromEntries(Object.entries(payload).map(([k,v])=>[k,String(v??"")]))});
+  const options = { method: isHealth ? "GET" : "POST" };
+  if(isHealth){
+    const params = new URLSearchParams({action});
     url += "?" + params.toString();
   }else{
     options.headers={"Content-Type":"text/plain;charset=utf-8"};
@@ -520,12 +520,12 @@ function closeEditTxModal(){
 function clearTxForm(){
   const wasEditing=!!editingTxId;
   if(wasEditing) closeEditTxModal();
-  editingTxId=null;activeSaveKey=null;$('txForm')?.reset();$("txDate").value=today;$('txPaidDate').value="";$('txPaidAmount').value="";$('txMetalValue').value="";$('txInitialKg').value="";$('txFinalKg').value="";
+  editingTxId=null;$('txForm')?.reset();$("txDate").value=today;$('txPaidDate').value="";$('txPaidAmount').value="";$('txMetalValue').value="";$('txInitialKg').value="";$('txFinalKg').value="";
   const submitBtn=$("txForm button[type=submit]");if(submitBtn)submitBtn.textContent="Salvar lançamento";$("txMsg").textContent="";initPaymentBreakdown();updateMetalFields();
 }
 async function editTx(id){
   const t=txs.find(x=>String(x.id)===String(id)); if(!t)return msg("txMsg","Lançamento não encontrado.");
-  editingTxId=String(id); activeSaveKey=null; page('lancamentos');
+  editingTxId=String(id); page('lancamentos');
   // O modal usa o mesmo formulário completo, mas isolado da tela de novo lançamento.
   openEditTxModal();
   setSelectValue("txType",t.type||"saida");
@@ -595,7 +595,7 @@ async function saveTxCore(e){
      rows.push({...base,amount:part.amount,original_amount:part.amount,transaction_date:$('txPaidDate').value||$('txDate').value,competence_date:$('txDate').value,paid_date:$('txPaidDate').value||$('txDate').value,status:status==='parcial'?'pago':status,payment_method:part.method,card_id:part.card_id||null,rate_id:part.rate_id||null,fee_percent:part.fee_percent||0,payment_received_amount:part.amount,installment_number:1,installment_total:1,group_id:g});
    }
  }
- const dedupeKey=activeSaveKey||(activeSaveKey=crypto.randomUUID());
+ const dedupeKey=await sha256(JSON.stringify({user_id:user.uid,type:base.type,total,transaction_date:base.transaction_date,category_id:base.category_id,name:base.name,description:base.description,payment_method:method,status,payment_parts:parts.map(p=>({method:p.method,amount:+p.amount||0,card_id:p.card_id||null,installments:+p.installments||1,fee_percent:+p.fee_percent||0,rate_id:p.rate_id||null}))}));
  let r;
  // Formas múltiplas/parciais usam a estrutura própria do Apps Script:
  // LANCAMENTOS + RECEBIMENTOS + PARCELAS. Isso evita gravar datas/valores
@@ -631,7 +631,6 @@ async function saveTxCore(e){
  if(r?.success===false){msg("txMsg",r.error||"Não foi possível salvar o lançamento.");return;}
  if(r?.duplicate){msg("txMsg","Este lançamento já foi salvo. A duplicidade foi bloqueada.");return;}
  msg("txMsg", "Lançamento salvo com sucesso.");
- activeSaveKey=null;
  clearTxForm();
  await load();
 }
