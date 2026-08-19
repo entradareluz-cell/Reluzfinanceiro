@@ -1,5 +1,5 @@
 // RELUZ FINANCEIRO — autenticação e banco 100% via Google Sheets + Apps Script.
-const API_URL = "https://script.google.com/macros/s/AKfycbzE9bJFnzt1JCLOmKjn6m8SmbcknTEEwc2JgdzSyDpw6L9DPV-2Q2EoeUNKu82YXPfM/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbx2DyMP3aFaFx9NU-DSJp5MpAwYvGYNW7BCuP9RNDk_-Ou0jvzvfqzr4CjFhoJ-zSSd/exec";
 let editingTxId = null;
 let machineRates = [];
 let activeSaveKey = null;
