@@ -1,5 +1,5 @@
 // RELUZ FINANCEIRO — autenticação e banco 100% via Google Sheets + Apps Script.
-const API_URL = "https://script.google.com/macros/s/AKfycbx2DyMP3aFaFx9NU-DSJp5MpAwYvGYNW7BCuP9RNDk_-Ou0jvzvfqzr4CjFhoJ-zSSd/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbxD7VX7e6gDeumC_E_IL7xMvJIzpJZSJ6VyB7xW5OU-gbyIry_QFPhoN8RUiM36S0Y_/exec";
 let editingTxId = null;
 let machineRates = [];
 let activeSaveKey = null;
@@ -198,29 +198,7 @@ document.addEventListener("DOMContentLoaded",async()=>{
   }catch(err){console.error(err);loginView();msg("authMsg",friendlyError(err))}
 });
 function loginView(){$("loginView").classList.remove("hidden");$("app").classList.add("hidden")}
-async function start(u){
-  // Login e carregamento de dados são etapas independentes.
-  // Se uma leitura do Sheets falhar ou demorar, o usuário ainda entra no sistema.
-  user=u;
-  $("userName").textContent=u.displayName||u.name||u.email||"Usuário";
-  $("loginView").classList.add("hidden");
-  $("app").classList.remove("hidden");
-  try{
-    const r=await getDoc(doc(null,"users",u.uid));
-    if(r?.exists?.() && r.data()?.name) $("userName").textContent=r.data().name;
-  }catch(err){ console.warn("Não foi possível carregar o perfil:",err); }
-
-  try{
-    await load();
-    page("dashboard");
-  }catch(err){
-    console.error("Erro ao carregar dados após login:",err);
-    page("dashboard");
-    msg("txMsg","Login realizado, mas alguns dados não puderam ser carregados. Tente atualizar a página.");
-  }finally{
-    setAuthLoading(false);
-  }
-}
+async function start(u){user=u;const r=await getDoc(doc(null,"users",u.uid));$("userName").textContent=r.exists()?r.data().name:(u.displayName||u.email);$("loginView").classList.add("hidden");$("app").classList.remove("hidden");await load();page("dashboard")}
 function setAuthLoading(on,title="Entrando na sua conta...",text="Conectando ao Google Sheets e carregando seus dados."){
   const overlay=$("authLoading");
   if(overlay){
@@ -288,64 +266,72 @@ async function signup(e){
   }
 }
 
-async function deduplicateCategories(rows){
+function normalizeCategory(c){
+  const typeRaw=String(c?.type||"").trim().toLowerCase();
+  const typeMap={
+    income:"entrada", receita:"entrada", entrada:"entrada",
+    expense:"saida", despesa:"saida", saída:"saida", saida:"saida",
+    both:"ambos", ambos:"ambos"
+  };
+  return {...c,name:String(c?.name||"").trim(),type:typeMap[typeRaw]||typeRaw};
+}
+function deduplicateCategories(rows){
   const seen=new Map();
-  const duplicates=[];
-  for(const c of (rows||[])){
-    const key=`${String(c.name||"").trim().toLocaleLowerCase("pt-BR")}::${String(c.type||"").trim().toLocaleLowerCase("pt-BR")}`;
-    if(!key || key.startsWith("::")) continue;
-    if(seen.has(key)) duplicates.push(c);
-    else seen.set(key,c);
-  }
-  if(duplicates.length){
-    for(const c of duplicates){
-      try{ await deleteDoc(doc(null,"categories",c.id)); }
-      catch(err){ console.warn("Não foi possível remover categoria duplicada",c.id,err); }
-    }
+  for(const raw of (rows||[])){
+    const c=normalizeCategory(raw);
+    if(!c.name) continue;
+    const key=`${c.name.toLocaleLowerCase("pt-BR")}::${c.type.toLocaleLowerCase("pt-BR")}`;
+    if(!seen.has(key)) seen.set(key,c);
   }
   return Array.from(seen.values());
 }
 
 async function load(){
   if(!user?.uid) return;
-  // Toda consulta é filtrada pelo UID para manter os dados de cada usuário separados na planilha.
   const uid=user.uid;
-  const results=await Promise.all([
-    sb.from("categories").select("*").eq("user_id",uid),
-    sb.from("accounts").select("*").eq("user_id",uid),
-    sb.from("cards").select("*").eq("user_id",uid),
-    sb.from("recurring").select("*,categories(name)").eq("user_id",uid),
-    sb.from("goals").select("*").eq("user_id",uid),
-    sb.from("transactions").select("*,categories(name),accounts(name),cards(name)").eq("user_id",uid).limit(3000),
-    sb.from("machine_rates").select("*").eq("user_id",uid)
-  ]);
-  const [a,b,c,d,e,f,g]=results;
-  const names=["categories","accounts","cards","recurring","goals","transactions","machine_rates"];
-  [a,b,c,d,e,f].forEach((r,i)=>{if(r.error) console.error("Erro ao carregar "+names[i],r.error)});
-  categories=await deduplicateCategories(a.data||[]);categories.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
+  // Uma única chamada ao Apps Script para os dados iniciais.
+  // Mantém a mesma estrutura de dados do carregamento anterior.
+  const r=await api("bootstrap",{});
+  if(!r || !r.success || !r.data) throw new Error(r?.error||"Não foi possível carregar os dados financeiros.");
+
+  const d=r.data||{};
+  categories=deduplicateCategories(d.categories||[]);
+  categories.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
   categoriesCache=categories;
-  accounts=(b.data||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
+
+  accounts=(d.accounts||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
   accountsCache=accounts;
-  cards=(c.data||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
+
+  cards=(d.cards||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
   cardsCache=cards;
+
+  recurring=d.recurring||[];
+  goals=d.goals||[];
+  txs=(d.transactions||[]).map(x=>{joinRelations("transactions",x);return x;});
+  machineRates=d.machine_rates||[];
+
+  // Se a conta ainda não tiver categorias, cria as padrão pelo próprio Apps Script.
+  // Não usamos mais a camada legada `sb` neste carregamento.
   if(!categories.length){
-    const defaults=[['Salário','entrada'],['Extra','entrada'],['Reembolso','entrada'],['Outros recebimentos','entrada'],['Casa','saida'],['Mercado','saida'],['Alimentação','saida'],['Carro','saida'],['Combustível','saida'],['Contas','saida'],['Celular/Internet','saida'],['Cartão','saida'],['Lazer','saida'],['Compras','saida'],['Pets','saida'],['Família','saida'],['Investimentos','saida'],['Outros','saida']];
-    const seed=await sb.from("categories").insert(defaults.map(([name,type])=>({user_id:uid,name,type})));
-    if(seed.error) console.error("Erro ao criar categorias padrão",seed.error);
-    else {
-      const fresh=await sb.from("categories").select("*").eq("user_id",uid);
-      categories=await deduplicateCategories(fresh.data||[]);categories.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
+    const defaults=[
+      ["Salário","entrada"],["Extra","entrada"],["Reembolso","entrada"],["Outros recebimentos","entrada"],
+      ["Casa","saida"],["Mercado","saida"],["Alimentação","saida"],["Carro","saida"],["Combustível","saida"],
+      ["Contas","saida"],["Celular/Internet","saida"],["Cartão","saida"],["Lazer","saida"],["Compras","saida"],
+      ["Pets","saida"],["Família","saida"],["Investimentos","saida"],["Outros","saida"]
+    ];
+    try{
+      const created=[];
+      for(const [name,type] of defaults){
+        const r=await api("create",{sheet:"CATEGORIAS",record:{user_id:uid,name,type,active:true}});
+        if(r?.data) created.push(normalizeCategory(r.data));
+      }
+      categories=deduplicateCategories(created);
       categoriesCache=categories;
+    }catch(err){
+      console.error("Erro ao criar categorias padrão:",err);
     }
   }
-  recurring=d.data||[];
-  goalsList=e.data||[];
-  txs=f.data||[];
-  machineRates=(g.data||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
-  txs.sort((x,y)=>String(y.transaction_date||"").localeCompare(String(x.transaction_date||"")));
-  txs.forEach(t=>joinRelations("transactions",t));
-  recurring.forEach(r=>joinRelations("recurring",r));
-  fill();render();window.__reluzLoaded=true
+  renderAll();
 }
 function fill(){
   fillCategorySelects();
@@ -366,7 +352,7 @@ function updateMetalFields(){
   const isPedido=String(cat?.name||"").trim().toLowerCase()==="pedido";
   el.classList.toggle("hidden",!isPedido);
 }
-function fillCategorySelects(){const type=$("txType")?.value||"saida";const available=categories.filter(c=>c.type==="ambos"||c.type===type);$("txCat").innerHTML=available.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join("")||'<option value="">Cadastre uma categoria primeiro</option>';const recurringType=$("recType")?.value||"saida";const recurringCats=categories.filter(c=>c.type==="ambos"||c.type===recurringType);$("recCat").innerHTML=recurringCats.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join("")||'<option value="">Cadastre uma categoria primeiro</option>';updateMetalFields()}
+function fillCategorySelects(){const type=$("txType")?.value||"saida";const available=categories.map(normalizeCategory).filter(c=>c.type==="ambos"||c.type===type);$("txCat").innerHTML=available.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join("")||'<option value="">Cadastre uma categoria primeiro</option>';const recurringType=$("recType")?.value||"saida";const recurringCats=categories.filter(c=>c.type==="ambos"||c.type===recurringType);$("recCat").innerHTML=recurringCats.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join("")||'<option value="">Cadastre uma categoria primeiro</option>';updateMetalFields()}
 async function saveCategory(e){
   e.preventDefault();
   msg("catMsg","");
@@ -605,35 +591,61 @@ async function saveTxCore(e){
  const base={user_id:user.uid,type:$('txType').value,amount:total,original_amount:total,transaction_date:$('txDate').value,competence_date:$('txDate').value,paid_date:$('txPaidDate').value||null,category_id:$('txCat').value,subcategory:$('txSubcategory').value||null,account_id:$('txAccount').value||null,card_id:$('txCard').value||null,payment_method:method,status,name:$('txName').value.trim(),description:$('txDesc').value.trim()||null,notes:$('txNotes').value||null,dre_class:$('txDreClass')?.value||($('txType').value==='entrada'?'receita':'despesa_operacional'),attachment_url:attachmentUrl,recurrence:$('txRecurring').value,group_id:g,payment_parts:parts,payment_received_amount:target,payment_fee_total:parts.reduce((s,p)=>s+p.amount*(p.fee_percent||0)/100,0),metal_value:+($("txMetalValue")?.value||0)||0,initial_kg:+($("txInitialKg")?.value||0)||0,final_kg:+($("txFinalKg")?.value||0)||0,category_name:categoryName};
  if(editingTxId){
    const current=txs.find(t=>t.id===editingTxId)||{};
+   if(!current || !current.id) throw new Error("Lançamento não encontrado para edição.");
+
    const totalFee=parts.reduce((s,p)=>s+(Number(p.amount)||0)*(Number(p.fee_percent)||0)/100,0);
    const netTotal=Math.max(0,total-totalFee);
+   const editStatus=status || current.status || "pago";
+   const editReceived=
+     editStatus==="pendente" ? 0 :
+     editStatus==="parcial" ? Math.min(total,Math.max(0,target)) :
+     total;
+
    const editRecord={
      ...base,
-     id:editingTxId,
      amount:netTotal,
      original_amount:total,
-     payment_fee_total:totalFee,
-     payment_received_amount:status==='pendente'?0:(status==='parcial'?target:total),
-     remaining_amount:status==='pendente'?total:Math.max(0,total-(status==='parcial'?target:total)),
-     fee_percent:parts.length===1?Number(parts[0].fee_percent||0):0,
+     status:editReceived>=total-0.01?"pago":(editReceived>0?"parcial":"pendente"),
      edited_at:new Date().toISOString(),
      installment_number:current.installment_number||1,
      installment_total:current.installment_total||1
    };
-   const r=await api("save_transaction",{
-     user_id:user.uid,
-     dedupe_key:crypto.randomUUID(),
+
+   // Keep the existing payment state during a normal edit. Payment changes
+   // continue to use the dedicated payment UI/logic.
+   delete editRecord.payment_parts;
+   delete editRecord.payment_received_amount;
+   delete editRecord.payment_fee_total;
+   delete editRecord.remaining_amount;
+
+   // `base` contains payment_parts for the form, but a normal edit must
+   // not enter the payment-children replacement path. Only send payment_parts
+   // when the user is explicitly editing a multiple-payment transaction.
+   if(method==="multiple"){
+     // Multiple-payment edits remain handled by the payment-specific flow.
+     editRecord.payment_parts=parts;
+   }
+
+   // Edição usa o endpoint genérico de UPDATE já existente no Apps Script.
+   // Não passa pelo fluxo de criação nem por dedupe_key.
+   const r=await api("update_simple_transaction",{
+     id:editingTxId,
      record:editRecord
    });
-   if(r?.duplicate && r.id!==editingTxId){
-     throw new Error("Não foi possível identificar o lançamento que está sendo editado.");
+
+   if(!r || !r.success){
+     throw new Error(r?.error || "O Apps Script não confirmou a atualização.");
    }
-   msg("txMsg","Lançamento atualizado.");
+   if(!r.data){
+     throw new Error("O Apps Script respondeu sem confirmar o lançamento atualizado.");
+   }
+
    activeSaveKey=null;
+   msg("txMsg","Lançamento atualizado.");
    clearTxForm();
    await load();
    return;
- }
+}
  let rows=[];
  for(const part of parts.length?parts:[{method,amount:target,card_id:$('txCard').value||null,rate_id:null,installments:1,fee_percent:0}]){
    const inst=Math.max(1,part.installments||1);
