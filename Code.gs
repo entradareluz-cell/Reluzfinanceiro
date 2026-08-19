@@ -97,19 +97,55 @@ function userId_(email) {
 }
 
 function userKeys_(userId) {
-  const uid = String(userId || '').trim();
+  const uid = String(userId || "").trim();
   if (!uid) return [];
-  const keys = [uid];
-  // Compatibilidade com contas antigas cujo id ainda era UUID.
+
+  const keys = [];
+  const add = v => {
+    const s = String(v || "").trim();
+    if (s && !keys.includes(s)) keys.push(s);
+  };
+
+  add(uid);
+
+  // O identificador atual é o e-mail normalizado.
+  const email = normalizeEmail_(uid);
+  if (email && email.includes("@")) add(email);
+
+  // Compatibilidade com usuários antigos: procura diretamente na aba
+  // USUARIOS sem passar por list_(), evitando recursão.
   try {
-    const u = findUserByEmail_(uid);
-    if (u) {
-      const legacy = String(u.id || '').trim();
-      const email = normalizeEmail_(u.email);
-      if (email && !keys.includes(email)) keys.push(email);
-      if (legacy && !keys.includes(legacy)) keys.push(legacy);
+    const sh = sheet_(TABLES.USUARIOS);
+    const values = rows_(sh);
+    if (values.length > 1) {
+      const h = values[0].map(String);
+      const idIx = h.indexOf("id");
+      const uidIx = h.indexOf("user_id");
+      const emailIx = h.indexOf("email");
+
+      for (let i = 1; i < values.length; i++) {
+        const row = values[i];
+        const rowId = idIx >= 0 ? String(row[idIx] || "").trim() : "";
+        const rowUid = uidIx >= 0 ? String(row[uidIx] || "").trim() : "";
+        const rowEmail = emailIx >= 0 ? normalizeEmail_(row[emailIx]) : "";
+
+        if (
+          rowId === uid ||
+          rowUid === uid ||
+          (email && rowEmail === email)
+        ) {
+          add(rowEmail);
+          add(rowUid);
+          add(rowId);
+          break;
+        }
+      }
     }
-  } catch (e) {}
+  } catch (e) {
+    // O e-mail atual continua sendo uma chave válida mesmo se a
+    // compatibilidade com registros antigos não puder ser lida.
+  }
+
   return keys;
 }
 
@@ -258,12 +294,22 @@ function list_(sheetName, userId) {
   const sh = sheet_(sheetName);
   const values = rows_(sh);
   if (values.length <= 1) return [];
+
   const h = values[0].map(String);
+  const keys = userId ? userKeys_(userId) : [];
+  const keySet = new Set(keys.map(k => String(k).trim()));
+  const hasUserId = h.includes("user_id");
+
   return values.slice(1)
     .filter(r => r.some(v => v !== ""))
-    .map(r => recordFromRow_(h,r))
-    .filter(r => !userId || !("user_id" in r) || userKeys_(userId).some(k => String(r.user_id) === String(k)));
+    .map(r => recordFromRow_(h, r))
+    .filter(r => {
+      if (!userId || !hasUserId) return true;
+      const recordUid = String(r.user_id || "").trim();
+      return recordUid && keySet.has(recordUid);
+    });
 }
+
 
 function find_(sheetName,id) {
   const sh = sheet_(sheetName);
@@ -343,17 +389,34 @@ function removeDuplicateCategories_(userId) {
   const sh = sheet_(TABLES.CATEGORIAS);
   const values = rows_(sh);
   if (values.length <= 1) return {removed:0};
+
   const h = values[0].map(String);
-  const ui=h.indexOf("user_id"), ni=h.indexOf("name"), ti=h.indexOf("type");
-  const seen={}, del=[];
-  for(let i=1;i<values.length;i++){
-    if(userId && ui>=0 && String(values[i][ui])!==String(userId)) continue;
-    const key=String(values[i][ni]||"").trim().toLowerCase()+"::"+String(values[i][ti]||"").trim().toLowerCase();
-    if(seen[key]) del.push(i+1); else seen[key]=true;
+  const ui = h.indexOf("user_id");
+  const ni = h.indexOf("name");
+  const ti = h.indexOf("type");
+  const keySet = new Set(userKeys_(userId).map(k => String(k).trim()));
+  const seen = {};
+  const del = [];
+
+  for (let i = 1; i < values.length; i++) {
+    if (userId && ui >= 0) {
+      const rowUid = String(values[i][ui] || "").trim();
+      if (!keySet.has(rowUid)) continue;
+    }
+
+    const key =
+      String(values[i][ni] || "").trim().toLowerCase() +
+      "::" +
+      String(values[i][ti] || "").trim().toLowerCase();
+
+    if (seen[key]) del.push(i + 1);
+    else seen[key] = true;
   }
-  del.sort((a,b)=>b-a).forEach(r=>sh.deleteRow(r));
+
+  del.sort((a,b) => b-a).forEach(r => sh.deleteRow(r));
   return {removed:del.length};
 }
+
 
 function dashboard_(userId) {
   const tx=list_(TABLES.LANCAMENTOS,userId);
