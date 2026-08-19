@@ -285,45 +285,45 @@ async function deduplicateCategories(rows){
 }
 
 async function load(){
-  const __loadStarted=performance.now();
   if(!user?.uid) return;
-  const r=await api("initial_load",{});
-  if(!r?.success || !r.data) throw new Error(r?.error||"Não foi possível carregar os dados.");
-
-  const d=r.data;
-  const uniqueCategories=(rows)=>{
-    const seen=new Map();
-    for(const c of (rows||[])){
-      const key=`${String(c.name||"").trim().toLocaleLowerCase("pt-BR")}::${String(c.type||"").trim().toLocaleLowerCase("pt-BR")}`;
-      if(!key || key.startsWith("::")) continue;
-      if(!seen.has(key)) seen.set(key,c);
-    }
-    return Array.from(seen.values());
-  };
-
-  categories=uniqueCategories(d.categories||[]);
-  categories.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
+  // Toda consulta é filtrada pelo UID para manter os dados de cada usuário separados na planilha.
+  const uid=user.uid;
+  const results=await Promise.all([
+    sb.from("categories").select("*").eq("user_id",uid),
+    sb.from("accounts").select("*").eq("user_id",uid),
+    sb.from("cards").select("*").eq("user_id",uid),
+    sb.from("recurring").select("*,categories(name)").eq("user_id",uid),
+    sb.from("goals").select("*").eq("user_id",uid),
+    sb.from("transactions").select("*,categories(name),accounts(name),cards(name)").eq("user_id",uid).limit(3000),
+    sb.from("machine_rates").select("*").eq("user_id",uid)
+  ]);
+  const [a,b,c,d,e,f,g]=results;
+  const names=["categories","accounts","cards","recurring","goals","transactions","machine_rates"];
+  [a,b,c,d,e,f].forEach((r,i)=>{if(r.error) console.error("Erro ao carregar "+names[i],r.error)});
+  categories=await deduplicateCategories(a.data||[]);categories.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
   categoriesCache=categories;
-
-  accounts=(d.accounts||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
+  accounts=(b.data||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
   accountsCache=accounts;
-
-  cards=(d.cards||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
+  cards=(c.data||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
   cardsCache=cards;
-
-  recurring=d.recurring||[];
-  goalsList=d.goals||[];
-  txs=d.transactions||[];
-  machineRates=(d.machine_rates||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
-
+  if(!categories.length){
+    const defaults=[['Salário','entrada'],['Extra','entrada'],['Reembolso','entrada'],['Outros recebimentos','entrada'],['Casa','saida'],['Mercado','saida'],['Alimentação','saida'],['Carro','saida'],['Combustível','saida'],['Contas','saida'],['Celular/Internet','saida'],['Cartão','saida'],['Lazer','saida'],['Compras','saida'],['Pets','saida'],['Família','saida'],['Investimentos','saida'],['Outros','saida']];
+    const seed=await sb.from("categories").insert(defaults.map(([name,type])=>({user_id:uid,name,type})));
+    if(seed.error) console.error("Erro ao criar categorias padrão",seed.error);
+    else {
+      const fresh=await sb.from("categories").select("*").eq("user_id",uid);
+      categories=await deduplicateCategories(fresh.data||[]);categories.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
+      categoriesCache=categories;
+    }
+  }
+  recurring=d.data||[];
+  goalsList=e.data||[];
+  txs=f.data||[];
+  machineRates=(g.data||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
   txs.sort((x,y)=>String(y.transaction_date||"").localeCompare(String(x.transaction_date||"")));
   txs.forEach(t=>joinRelations("transactions",t));
   recurring.forEach(r=>joinRelations("recurring",r));
-
-  fill();
-  render();
-  window.__reluzLoaded=true;
-  console.info("[Reluz] carregamento inicial:", Math.round(performance.now()-__loadStarted)+"ms");
+  fill();render();window.__reluzLoaded=true
 }
 function fill(){
   fillCategorySelects();
@@ -583,61 +583,35 @@ async function saveTxCore(e){
  const base={user_id:user.uid,type:$('txType').value,amount:total,original_amount:total,transaction_date:$('txDate').value,competence_date:$('txDate').value,paid_date:$('txPaidDate').value||null,category_id:$('txCat').value,subcategory:$('txSubcategory').value||null,account_id:$('txAccount').value||null,card_id:$('txCard').value||null,payment_method:method,status,name:$('txName').value.trim(),description:$('txDesc').value.trim()||null,notes:$('txNotes').value||null,dre_class:$('txDreClass')?.value||($('txType').value==='entrada'?'receita':'despesa_operacional'),attachment_url:attachmentUrl,recurrence:$('txRecurring').value,group_id:g,payment_parts:parts,payment_received_amount:target,payment_fee_total:parts.reduce((s,p)=>s+p.amount*(p.fee_percent||0)/100,0),metal_value:+($("txMetalValue")?.value||0)||0,initial_kg:+($("txInitialKg")?.value||0)||0,final_kg:+($("txFinalKg")?.value||0)||0,category_name:categoryName};
  if(editingTxId){
    const current=txs.find(t=>t.id===editingTxId)||{};
-   if(!current || !current.id) throw new Error("Lançamento não encontrado para edição.");
-
    const totalFee=parts.reduce((s,p)=>s+(Number(p.amount)||0)*(Number(p.fee_percent)||0)/100,0);
    const netTotal=Math.max(0,total-totalFee);
-   const editStatus=status || current.status || "pago";
-   const editReceived=
-     editStatus==="pendente" ? 0 :
-     editStatus==="parcial" ? Math.min(total,Math.max(0,target)) :
-     total;
-
    const editRecord={
      ...base,
+     id:editingTxId,
      amount:netTotal,
      original_amount:total,
-     status:editReceived>=total-0.01?"pago":(editReceived>0?"parcial":"pendente"),
+     payment_fee_total:totalFee,
+     payment_received_amount:status==='pendente'?0:(status==='parcial'?target:total),
+     remaining_amount:status==='pendente'?total:Math.max(0,total-(status==='parcial'?target:total)),
+     fee_percent:parts.length===1?Number(parts[0].fee_percent||0):0,
      edited_at:new Date().toISOString(),
      installment_number:current.installment_number||1,
      installment_total:current.installment_total||1
    };
-
-   // Keep the existing payment state during a normal edit. Payment changes
-   // continue to use the dedicated payment UI/logic.
-   delete editRecord.payment_parts;
-   delete editRecord.payment_received_amount;
-   delete editRecord.payment_fee_total;
-   delete editRecord.remaining_amount;
-
-   // `base` contains payment_parts for the form, but a normal edit must
-   // not enter the payment-children replacement path. Only send payment_parts
-   // when the user is explicitly editing a multiple-payment transaction.
-   if(method==="multiple"){
-     // Multiple-payment edits remain handled by the payment-specific flow.
-     editRecord.payment_parts=parts;
-   }
-
-   // Edição usa o endpoint genérico de UPDATE já existente no Apps Script.
-   // Não passa pelo fluxo de criação nem por dedupe_key.
-   const r=await api("update_simple_transaction",{
-     id:editingTxId,
+   const r=await api("save_transaction",{
+     user_id:user.uid,
+     dedupe_key:crypto.randomUUID(),
      record:editRecord
    });
-
-   if(!r || !r.success){
-     throw new Error(r?.error || "O Apps Script não confirmou a atualização.");
+   if(r?.duplicate && r.id!==editingTxId){
+     throw new Error("Não foi possível identificar o lançamento que está sendo editado.");
    }
-   if(!r.data){
-     throw new Error("O Apps Script respondeu sem confirmar o lançamento atualizado.");
-   }
-
-   activeSaveKey=null;
    msg("txMsg","Lançamento atualizado.");
+   activeSaveKey=null;
    clearTxForm();
    await load();
    return;
-}
+ }
  let rows=[];
  for(const part of parts.length?parts:[{method,amount:target,card_id:$('txCard').value||null,rate_id:null,installments:1,fee_percent:0}]){
    const inst=Math.max(1,part.installments||1);

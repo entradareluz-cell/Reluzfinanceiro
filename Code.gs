@@ -735,9 +735,6 @@ function doGet(e) {
       return out_({success:true,data:{user,session_token:createSessionToken_(user)}});
     }
     const auth=requireAuth_(p), uid=auth.uid;
-    if(action==="initial_load"){
-      return out_({success:true,data:initialLoad_(uid)});
-    }
     if(action==="list") return out_({success:true,data:list_(p.sheet,uid)});
     if(action==="get") return out_({success:true,data:assertOwned_(p.sheet,p.id,uid)});
     if(action==="dashboard") return out_({success:true,data:dashboard_(uid)});
@@ -745,24 +742,6 @@ function doGet(e) {
     if(action==="search") return out_({success:true,data:search_(uid,p.q)});
     return out_({success:false,error:"Ação não reconhecida."});
   } catch(err) { return out_({success:false,error:String(err.message||err)}); }
-}
-
-function initialLoad_(userId) {
-  const uid=String(userId||"");
-  const names={
-    categories:TABLES.CATEGORIAS,
-    accounts:TABLES.CONTAS,
-    cards:TABLES.CARTOES,
-    recurring:TABLES.RECORRENTES,
-    goals:TABLES.METAS,
-    transactions:TABLES.LANCAMENTOS,
-    machine_rates:TABLES.TAXAS
-  };
-  const result={};
-  Object.keys(names).forEach(k=>{
-    result[k]=list_(names[k],uid);
-  });
-  return result;
 }
 
 function doPost(e) {
@@ -796,18 +775,6 @@ function doPost(e) {
       const created=create_(sheet,record);
       audit_(uid,"create",sheet,created.id,created);
       return out_({success:true,data:created});
-    }
-    if(action==="update_simple_transaction"){
-      const sheet=TABLES.LANCAMENTOS;
-      const id=String(p.id||"").trim();
-      if(!id) throw new Error("ID do lançamento não informado.");
-      assertOwned_(sheet,id,uid);
-      const record=Object.assign({},p.record||{});
-      delete record.user_id;
-      delete record.id;
-      const data=update_(sheet,id,record);
-      audit_(uid,"update",sheet,id,data);
-      return out_({success:true,data:data});
     }
     if(action==="update"){
       const sheet=assertWritable_(p.sheet,auth);
