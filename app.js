@@ -2,6 +2,7 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbzE9bJFnzt1JCLOmKjn6m8SmbcknTEEwc2JgdzSyDpw6L9DPV-2Q2EoeUNKu82YXPfM/exec";
 let editingTxId = null;
 let machineRates = [];
+let activeSaveKey = null;
 
 const TABLES={
   transactions:"LANCAMENTOS",categories:"CATEGORIAS",accounts:"CONTAS",cards:"CARTOES",
@@ -15,12 +16,11 @@ async function api(action,payload={}){
   // Autenticação usa GET porque o Google Apps Script redireciona Web Apps
   // e isso evita problemas de CORS/preflight no navegador. As operações
   // de dados continuam usando POST.
-  const isHealth = action === "health";
-  const isAuth = action === "login" || action === "signup";
+  const isAuth = action === "login" || action === "signup" || action === "health";
   let url = API_URL;
-  const options = { method: isHealth ? "GET" : "POST" };
-  if(isHealth){
-    const params = new URLSearchParams({action});
+  const options = { method: isAuth ? "GET" : "POST" };
+  if(isAuth){
+    const params = new URLSearchParams({action, ...Object.fromEntries(Object.entries(payload).map(([k,v])=>[k,String(v??"")]))});
     url += "?" + params.toString();
   }else{
     options.headers={"Content-Type":"text/plain;charset=utf-8"};
@@ -41,7 +41,15 @@ async function api(action,payload={}){
   }
   const text=await res.text();
   let data;
-  try{data=JSON.parse(text)}catch{throw new Error(text||"Resposta inválida do Apps Script.");}
+  try{
+    data=JSON.parse(text);
+  }catch{
+    const detail=text||"Resposta vazia do Apps Script.";
+    throw new Error(`Resposta inválida do Apps Script (${res.status}). ${detail.slice(0,300)}`);
+  }
+  if(!res.ok){
+    throw new Error(data?.error||`Apps Script respondeu HTTP ${res.status}.`);
+  }
   if(data?.success===false){
     const message=data.error||"Erro no Apps Script.";
     if(/sessão|sessao|acesso negado|usuário não informado|usuario nao informado/i.test(message) && !isAuth){
@@ -520,12 +528,12 @@ function closeEditTxModal(){
 function clearTxForm(){
   const wasEditing=!!editingTxId;
   if(wasEditing) closeEditTxModal();
-  editingTxId=null;$('txForm')?.reset();$("txDate").value=today;$('txPaidDate').value="";$('txPaidAmount').value="";$('txMetalValue').value="";$('txInitialKg').value="";$('txFinalKg').value="";
+  editingTxId=null;activeSaveKey=null;$('txForm')?.reset();$("txDate").value=today;$('txPaidDate').value="";$('txPaidAmount').value="";$('txMetalValue').value="";$('txInitialKg').value="";$('txFinalKg').value="";
   const submitBtn=$("txForm button[type=submit]");if(submitBtn)submitBtn.textContent="Salvar lançamento";$("txMsg").textContent="";initPaymentBreakdown();updateMetalFields();
 }
 async function editTx(id){
   const t=txs.find(x=>String(x.id)===String(id)); if(!t)return msg("txMsg","Lançamento não encontrado.");
-  editingTxId=String(id); page('lancamentos');
+  editingTxId=String(id); activeSaveKey=null; page('lancamentos');
   // O modal usa o mesmo formulário completo, mas isolado da tela de novo lançamento.
   openEditTxModal();
   setSelectValue("txType",t.type||"saida");
@@ -574,11 +582,62 @@ async function saveTxCore(e){
  const categoryName=categories.find(c=>c.id===$('txCat').value)?.name||"";
  const base={user_id:user.uid,type:$('txType').value,amount:total,original_amount:total,transaction_date:$('txDate').value,competence_date:$('txDate').value,paid_date:$('txPaidDate').value||null,category_id:$('txCat').value,subcategory:$('txSubcategory').value||null,account_id:$('txAccount').value||null,card_id:$('txCard').value||null,payment_method:method,status,name:$('txName').value.trim(),description:$('txDesc').value.trim()||null,notes:$('txNotes').value||null,dre_class:$('txDreClass')?.value||($('txType').value==='entrada'?'receita':'despesa_operacional'),attachment_url:attachmentUrl,recurrence:$('txRecurring').value,group_id:g,payment_parts:parts,payment_received_amount:target,payment_fee_total:parts.reduce((s,p)=>s+p.amount*(p.fee_percent||0)/100,0),metal_value:+($("txMetalValue")?.value||0)||0,initial_kg:+($("txInitialKg")?.value||0)||0,final_kg:+($("txFinalKg")?.value||0)||0,category_name:categoryName};
  if(editingTxId){
-   const ref=doc(null,"transactions",editingTxId);const current=txs.find(t=>t.id===editingTxId)||{};
-   const fee=parts[0]?.fee_percent||0, net=total-total*fee/100;
-   await updateDoc(ref,{...base,amount:net,original_amount:total,fee_percent:fee,edited_at:serverTimestamp(),installment_number:current.installment_number||1,installment_total:current.installment_total||1});
-   msg("txMsg","Lançamento atualizado.");clearTxForm();await load();return;
- }
+   const current=txs.find(t=>t.id===editingTxId)||{};
+   if(!current || !current.id) throw new Error("Lançamento não encontrado para edição.");
+
+   const totalFee=parts.reduce((s,p)=>s+(Number(p.amount)||0)*(Number(p.fee_percent)||0)/100,0);
+   const netTotal=Math.max(0,total-totalFee);
+   const editStatus=status || current.status || "pago";
+   const editReceived=
+     editStatus==="pendente" ? 0 :
+     editStatus==="parcial" ? Math.min(total,Math.max(0,target)) :
+     total;
+
+   const editRecord={
+     ...base,
+     amount:netTotal,
+     original_amount:total,
+     status:editReceived>=total-0.01?"pago":(editReceived>0?"parcial":"pendente"),
+     edited_at:new Date().toISOString(),
+     installment_number:current.installment_number||1,
+     installment_total:current.installment_total||1
+   };
+
+   // Keep the existing payment state during a normal edit. Payment changes
+   // continue to use the dedicated payment UI/logic.
+   delete editRecord.payment_parts;
+   delete editRecord.payment_received_amount;
+   delete editRecord.payment_fee_total;
+   delete editRecord.remaining_amount;
+
+   // `base` contains payment_parts for the form, but a normal edit must
+   // not enter the payment-children replacement path. Only send payment_parts
+   // when the user is explicitly editing a multiple-payment transaction.
+   if(method==="multiple"){
+     // Multiple-payment edits remain handled by the payment-specific flow.
+     editRecord.payment_parts=parts;
+   }
+
+   // Edição usa o endpoint genérico de UPDATE já existente no Apps Script.
+   // Não passa pelo fluxo de criação nem por dedupe_key.
+   const r=await api("update_simple_transaction",{
+     id:editingTxId,
+     record:editRecord
+   });
+
+   if(!r || !r.success){
+     throw new Error(r?.error || "O Apps Script não confirmou a atualização.");
+   }
+   if(!r.data){
+     throw new Error("O Apps Script respondeu sem confirmar o lançamento atualizado.");
+   }
+
+   activeSaveKey=null;
+   msg("txMsg","Lançamento atualizado.");
+   clearTxForm();
+   await load();
+   return;
+}
  let rows=[];
  for(const part of parts.length?parts:[{method,amount:target,card_id:$('txCard').value||null,rate_id:null,installments:1,fee_percent:0}]){
    const inst=Math.max(1,part.installments||1);
@@ -595,7 +654,7 @@ async function saveTxCore(e){
      rows.push({...base,amount:part.amount,original_amount:part.amount,transaction_date:$('txPaidDate').value||$('txDate').value,competence_date:$('txDate').value,paid_date:$('txPaidDate').value||$('txDate').value,status:status==='parcial'?'pago':status,payment_method:part.method,card_id:part.card_id||null,rate_id:part.rate_id||null,fee_percent:part.fee_percent||0,payment_received_amount:part.amount,installment_number:1,installment_total:1,group_id:g});
    }
  }
- const dedupeKey=await sha256(JSON.stringify({user_id:user.uid,type:base.type,total,transaction_date:base.transaction_date,category_id:base.category_id,name:base.name,description:base.description,payment_method:method,status,payment_parts:parts.map(p=>({method:p.method,amount:+p.amount||0,card_id:p.card_id||null,installments:+p.installments||1,fee_percent:+p.fee_percent||0,rate_id:p.rate_id||null}))}));
+ const dedupeKey=activeSaveKey||(activeSaveKey=crypto.randomUUID());
  let r;
  // Formas múltiplas/parciais usam a estrutura própria do Apps Script:
  // LANCAMENTOS + RECEBIMENTOS + PARCELAS. Isso evita gravar datas/valores
@@ -621,7 +680,20 @@ async function saveTxCore(e){
    // Lançamento simples: grava diretamente um registro.
    // Não usa o fluxo de múltiplas parcelas, evitando que um lançamento
    // novo seja tratado acidentalmente como edição.
-   const simpleRow = rows[0] || {...base, amount:target, original_amount:target};
+   const simpleFee=parts.reduce((s,p)=>s+(Number(p.amount)||0)*(Number(p.fee_percent)||0)/100,0);
+   const simpleGross=(status==='pendente')?total:total;
+   const simpleNet=Math.max(0,simpleGross-simpleFee);
+   const simpleRow = {
+     ...rows[0],
+     ...base,
+     amount:simpleNet,
+     original_amount:simpleGross,
+     payment_received_amount:status==='pendente'?0:simpleGross,
+     remaining_amount:status==='pendente'?simpleGross:0,
+     payment_fee_total:simpleFee,
+     status:status==='pendente'?'pendente':'pago',
+     fee_percent:parts.length===1?Number(parts[0].fee_percent||0):0
+   };
    r=await api("save_transaction",{
      user_id:user.uid,
      dedupe_key:dedupeKey,
@@ -631,6 +703,7 @@ async function saveTxCore(e){
  if(r?.success===false){msg("txMsg",r.error||"Não foi possível salvar o lançamento.");return;}
  if(r?.duplicate){msg("txMsg","Este lançamento já foi salvo. A duplicidade foi bloqueada.");return;}
  msg("txMsg", "Lançamento salvo com sucesso.");
+ activeSaveKey=null;
  clearTxForm();
  await load();
 }
