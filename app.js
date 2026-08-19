@@ -198,7 +198,23 @@ document.addEventListener("DOMContentLoaded",async()=>{
   }catch(err){console.error(err);loginView();msg("authMsg",friendlyError(err))}
 });
 function loginView(){$("loginView").classList.remove("hidden");$("app").classList.add("hidden")}
-async function start(u){user=u;const r=await getDoc(doc(null,"users",u.uid));$("userName").textContent=r.exists()?r.data().name:(u.displayName||u.email);$("loginView").classList.add("hidden");$("app").classList.remove("hidden");await load();page("dashboard")}
+async function start(u){
+  user=u;
+  // O login não deve ficar bloqueado pelo carregamento dos dados.
+  // Primeiro entra na aplicação; os dados são carregados em seguida.
+  $("userName").textContent=u?.displayName||u?.email||"Usuário";
+  $("loginView").classList.add("hidden");
+  $("app").classList.remove("hidden");
+  setAuthLoading(false);
+  page("dashboard");
+  try{
+    await load();
+  }catch(err){
+    console.error("Erro ao carregar dados após login:",err);
+    // O login continua válido mesmo que uma leitura de dados falhe.
+    msg("authMsg",friendlyError(err));
+  }
+}
 function setAuthLoading(on,title="Entrando na sua conta...",text="Conectando ao Google Sheets e carregando seus dados."){
   const overlay=$("authLoading");
   if(overlay){
