@@ -198,7 +198,29 @@ document.addEventListener("DOMContentLoaded",async()=>{
   }catch(err){console.error(err);loginView();msg("authMsg",friendlyError(err))}
 });
 function loginView(){$("loginView").classList.remove("hidden");$("app").classList.add("hidden")}
-async function start(u){user=u;const r=await getDoc(doc(null,"users",u.uid));$("userName").textContent=r.exists()?r.data().name:(u.displayName||u.email);$("loginView").classList.add("hidden");$("app").classList.remove("hidden");await load();page("dashboard")}
+async function start(u){
+  // Login e carregamento de dados são etapas independentes.
+  // Se uma leitura do Sheets falhar ou demorar, o usuário ainda entra no sistema.
+  user=u;
+  $("userName").textContent=u.displayName||u.name||u.email||"Usuário";
+  $("loginView").classList.add("hidden");
+  $("app").classList.remove("hidden");
+  try{
+    const r=await getDoc(doc(null,"users",u.uid));
+    if(r?.exists?.() && r.data()?.name) $("userName").textContent=r.data().name;
+  }catch(err){ console.warn("Não foi possível carregar o perfil:",err); }
+
+  try{
+    await load();
+    page("dashboard");
+  }catch(err){
+    console.error("Erro ao carregar dados após login:",err);
+    page("dashboard");
+    msg("txMsg","Login realizado, mas alguns dados não puderam ser carregados. Tente atualizar a página.");
+  }finally{
+    setAuthLoading(false);
+  }
+}
 function setAuthLoading(on,title="Entrando na sua conta...",text="Conectando ao Google Sheets e carregando seus dados."){
   const overlay=$("authLoading");
   if(overlay){
