@@ -1,5 +1,5 @@
 // RELUZ FINANCEIRO — autenticação e banco 100% via Google Sheets + Apps Script.
-const API_URL = "https://script.google.com/macros/s/AKfycbxD7VX7e6gDeumC_E_IL7xMvJIzpJZSJ6VyB7xW5OU-gbyIry_QFPhoN8RUiM36S0Y_/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbzE9bJFnzt1JCLOmKjn6m8SmbcknTEEwc2JgdzSyDpw6L9DPV-2Q2EoeUNKu82YXPfM/exec";
 let editingTxId = null;
 let machineRates = [];
 let activeSaveKey = null;
@@ -285,45 +285,45 @@ async function deduplicateCategories(rows){
 }
 
 async function load(){
+  const __loadStarted=performance.now();
   if(!user?.uid) return;
-  // Toda consulta é filtrada pelo UID para manter os dados de cada usuário separados na planilha.
-  const uid=user.uid;
-  const results=await Promise.all([
-    sb.from("categories").select("*").eq("user_id",uid),
-    sb.from("accounts").select("*").eq("user_id",uid),
-    sb.from("cards").select("*").eq("user_id",uid),
-    sb.from("recurring").select("*,categories(name)").eq("user_id",uid),
-    sb.from("goals").select("*").eq("user_id",uid),
-    sb.from("transactions").select("*,categories(name),accounts(name),cards(name)").eq("user_id",uid).limit(3000),
-    sb.from("machine_rates").select("*").eq("user_id",uid)
-  ]);
-  const [a,b,c,d,e,f,g]=results;
-  const names=["categories","accounts","cards","recurring","goals","transactions","machine_rates"];
-  [a,b,c,d,e,f].forEach((r,i)=>{if(r.error) console.error("Erro ao carregar "+names[i],r.error)});
-  categories=await deduplicateCategories(a.data||[]);categories.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
-  categoriesCache=categories;
-  accounts=(b.data||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
-  accountsCache=accounts;
-  cards=(c.data||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
-  cardsCache=cards;
-  if(!categories.length){
-    const defaults=[['Salário','entrada'],['Extra','entrada'],['Reembolso','entrada'],['Outros recebimentos','entrada'],['Casa','saida'],['Mercado','saida'],['Alimentação','saida'],['Carro','saida'],['Combustível','saida'],['Contas','saida'],['Celular/Internet','saida'],['Cartão','saida'],['Lazer','saida'],['Compras','saida'],['Pets','saida'],['Família','saida'],['Investimentos','saida'],['Outros','saida']];
-    const seed=await sb.from("categories").insert(defaults.map(([name,type])=>({user_id:uid,name,type})));
-    if(seed.error) console.error("Erro ao criar categorias padrão",seed.error);
-    else {
-      const fresh=await sb.from("categories").select("*").eq("user_id",uid);
-      categories=await deduplicateCategories(fresh.data||[]);categories.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
-      categoriesCache=categories;
+  const r=await api("initial_load",{});
+  if(!r?.success || !r.data) throw new Error(r?.error||"Não foi possível carregar os dados.");
+
+  const d=r.data;
+  const uniqueCategories=(rows)=>{
+    const seen=new Map();
+    for(const c of (rows||[])){
+      const key=`${String(c.name||"").trim().toLocaleLowerCase("pt-BR")}::${String(c.type||"").trim().toLocaleLowerCase("pt-BR")}`;
+      if(!key || key.startsWith("::")) continue;
+      if(!seen.has(key)) seen.set(key,c);
     }
-  }
-  recurring=d.data||[];
-  goalsList=e.data||[];
-  txs=f.data||[];
-  machineRates=(g.data||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
+    return Array.from(seen.values());
+  };
+
+  categories=uniqueCategories(d.categories||[]);
+  categories.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
+  categoriesCache=categories;
+
+  accounts=(d.accounts||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
+  accountsCache=accounts;
+
+  cards=(d.cards||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
+  cardsCache=cards;
+
+  recurring=d.recurring||[];
+  goalsList=d.goals||[];
+  txs=d.transactions||[];
+  machineRates=(d.machine_rates||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
+
   txs.sort((x,y)=>String(y.transaction_date||"").localeCompare(String(x.transaction_date||"")));
   txs.forEach(t=>joinRelations("transactions",t));
   recurring.forEach(r=>joinRelations("recurring",r));
-  fill();render();window.__reluzLoaded=true
+
+  fill();
+  render();
+  window.__reluzLoaded=true;
+  console.info("[Reluz] carregamento inicial:", Math.round(performance.now()-__loadStarted)+"ms");
 }
 function fill(){
   fillCategorySelects();
