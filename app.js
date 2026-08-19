@@ -318,44 +318,89 @@ function rowsFromApi_(r){
 
 async function load(){
   if(!user?.uid) return;
-  // Toda consulta é filtrada pelo UID para manter os dados de cada usuário separados na planilha.
-  const uid=user.uid;
-  const results=await Promise.all([
-    sb.from("categories").select("*").eq("user_id",uid),
-    sb.from("accounts").select("*").eq("user_id",uid),
-    sb.from("cards").select("*").eq("user_id",uid),
-    sb.from("recurring").select("*,categories(name)").eq("user_id",uid),
-    sb.from("goals").select("*").eq("user_id",uid),
-    sb.from("transactions").select("*,categories(name),accounts(name),cards(name)").eq("user_id",uid).limit(3000),
-    sb.from("machine_rates").select("*").eq("user_id",uid)
-  ]);
-  const [a,b,c,d,e,f,g]=results;
-  const names=["categories","accounts","cards","recurring","goals","transactions","machine_rates"];
-  [a,b,c,d,e,f].forEach((r,i)=>{if(r.error) console.error("Erro ao carregar "+names[i],r.error)});
-  categories=await deduplicateCategories(rowsFromApi_(a));categories.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
-  categoriesCache=categories;
-  accounts=(rowsFromApi_(b)).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
-  accountsCache=accounts;
-  cards=(rowsFromApi_(c)).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
-  cardsCache=cards;
-  if(!categories.length){
-    const defaults=[['Salário','entrada'],['Extra','entrada'],['Reembolso','entrada'],['Outros recebimentos','entrada'],['Casa','saida'],['Mercado','saida'],['Alimentação','saida'],['Carro','saida'],['Combustível','saida'],['Contas','saida'],['Celular/Internet','saida'],['Cartão','saida'],['Lazer','saida'],['Compras','saida'],['Pets','saida'],['Família','saida'],['Investimentos','saida'],['Outros','saida']];
-    const seed=await sb.from("categories").insert(defaults.map(([name,type])=>({user_id:uid,name,type})));
-    if(seed.error) console.error("Erro ao criar categorias padrão",seed.error);
-    else {
-      const fresh=await sb.from("categories").select("*").eq("user_id",uid);
-      categories=await deduplicateCategories(rowsFromApi_(fresh));categories.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
-      categoriesCache=categories;
-    }
+  const uid=String(user.uid);
+
+  // Carrega diretamente pelo endpoint do Apps Script. Não usa a camada
+  // legada de consultas para evitar que filtros antigos façam categorias
+  // ou lançamentos desaparecerem.
+  const read=(sheet)=>api("list",{sheet}).then(r=>rowsFromApi_(r));
+
+  try{
+    const [
+      categoryRows, accountRows, cardRows,
+      recurringRows, goalRows, txRows, rateRows
+    ]=await Promise.all([
+      read("CATEGORIAS"),
+      read("CONTAS"),
+      read("CARTOES"),
+      read("RECORRENTES"),
+      read("METAS"),
+      read("LANCAMENTOS"),
+      read("TAXAS")
+    ]);
+
+    categories=deduplicateCategories(categoryRows);
+    categories.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||""),"pt-BR"));
+    accounts=accountRows.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||""),"pt-BR"));
+    cards=cardRows.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||""),"pt-BR"));
+    recurring=recurringRows;
+    goalsList=goalRows;
+    txs=txRows;
+    machineRates=rateRows.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||""),"pt-BR"));
+
+    categoriesCache=categories.slice();
+    accountsCache=accounts.slice();
+    cardsCache=cards.slice();
+
+    txs.sort((x,y)=>String(y.transaction_date||"").localeCompare(String(x.transaction_date||"")));
+    txs.forEach(t=>joinRelations("transactions",t));
+    recurring.forEach(r=>joinRelations("recurring",r));
+
+    // Guarda a última leitura válida para que um refresh não deixe a tela vazia
+    // se o Apps Script estiver temporariamente lento/offline.
+    try{
+      localStorage.setItem("reluz_data_cache",JSON.stringify({
+        uid,
+        at:Date.now(),
+        categories,accounts,cards,recurring,goalsList,txs,machineRates
+      }));
+    }catch(e){}
+
+    fill();
+    render();
+    window.__reluzLoaded=true;
+    window.__reluzDataError="";
+  }catch(error){
+    console.error("Erro ao carregar dados do Google Sheets:",error);
+    window.__reluzDataError=String(error?.message||error);
+
+    // Fallback: mantém a última leitura válida após atualizar a página.
+    try{
+      const cache=JSON.parse(localStorage.getItem("reluz_data_cache")||"null");
+      if(cache && String(cache.uid)===uid){
+        categories=cache.categories||[];
+        accounts=cache.accounts||[];
+        cards=cache.cards||[];
+        recurring=cache.recurring||[];
+        goalsList=cache.goalsList||[];
+        txs=cache.txs||[];
+        machineRates=cache.machineRates||[];
+        categoriesCache=categories.slice();
+        accountsCache=accounts.slice();
+        cardsCache=cards.slice();
+        txs.forEach(t=>joinRelations("transactions",t));
+        recurring.forEach(r=>joinRelations("recurring",r));
+        fill();
+        render();
+        msg("authMsg","Dados exibidos do último carregamento. Sincronização com o Google Sheets pendente.");
+        return;
+      }
+    }catch(e){}
+
+    fill();
+    render();
+    msg("authMsg","Não foi possível carregar os dados do Google Sheets. Tente atualizar novamente.");
   }
-  recurring=rowsFromApi_(d);
-  goalsList=rowsFromApi_(e);
-  txs=rowsFromApi_(f);
-  machineRates=(rowsFromApi_(g)).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
-  txs.sort((x,y)=>String(y.transaction_date||"").localeCompare(String(x.transaction_date||"")));
-  txs.forEach(t=>joinRelations("transactions",t));
-  recurring.forEach(r=>joinRelations("recurring",r));
-  fill();render();window.__reluzLoaded=true
 }
 function fill(){
   fillCategorySelects();
