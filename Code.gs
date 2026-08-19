@@ -776,6 +776,18 @@ function doPost(e) {
       audit_(uid,"create",sheet,created.id,created);
       return out_({success:true,data:created});
     }
+    if(action==="update_simple_transaction"){
+      const sheet=TABLES.LANCAMENTOS;
+      const id=String(p.id||"").trim();
+      if(!id) throw new Error("ID do lançamento não informado.");
+      assertOwned_(sheet,id,uid);
+      const record=Object.assign({},p.record||{});
+      delete record.user_id;
+      delete record.id;
+      const data=update_(sheet,id,record);
+      audit_(uid,"update",sheet,id,data);
+      return out_({success:true,data:data});
+    }
     if(action==="update"){
       const sheet=assertWritable_(p.sheet,auth);
       assertOwned_(sheet,p.id,uid);

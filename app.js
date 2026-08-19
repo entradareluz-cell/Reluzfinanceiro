@@ -597,29 +597,30 @@ async function saveTxCore(e){
      ...base,
      amount:netTotal,
      original_amount:total,
-     payment_fee_total:totalFee,
-     payment_received_amount:editReceived,
-     remaining_amount:Math.max(0,total-editReceived),
      status:editReceived>=total-0.01?"pago":(editReceived>0?"parcial":"pendente"),
-     fee_percent:parts.length===1?Number(parts[0].fee_percent||0):0,
      edited_at:new Date().toISOString(),
      installment_number:current.installment_number||1,
      installment_total:current.installment_total||1
    };
 
+   // Keep the existing payment state during a normal edit. Payment changes
+   // continue to use the dedicated payment UI/logic.
+   delete editRecord.payment_parts;
+   delete editRecord.payment_received_amount;
+   delete editRecord.payment_fee_total;
+   delete editRecord.remaining_amount;
+
    // `base` contains payment_parts for the form, but a normal edit must
    // not enter the payment-children replacement path. Only send payment_parts
    // when the user is explicitly editing a multiple-payment transaction.
    if(method==="multiple"){
+     // Multiple-payment edits remain handled by the payment-specific flow.
      editRecord.payment_parts=parts;
-   }else{
-     delete editRecord.payment_parts;
    }
 
    // Edição usa o endpoint genérico de UPDATE já existente no Apps Script.
    // Não passa pelo fluxo de criação nem por dedupe_key.
-   const r=await api("update",{
-     sheet:"LANCAMENTOS",
+   const r=await api("update_simple_transaction",{
      id:editingTxId,
      record:editRecord
    });
