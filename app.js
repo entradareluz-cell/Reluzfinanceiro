@@ -1,8 +1,7 @@
 // RELUZ FINANCEIRO — autenticação e banco 100% via Google Sheets + Apps Script.
-const API_URL = "https://script.google.com/macros/s/AKfycbwqWY_aQGm8LPn6kTkbXHafUZsqPCwwZXgxrGpSQoM/dev";
+const API_URL = "https://script.google.com/macros/s/AKfycbzE9bJFnzt1JCLOmKjn6m8SmbcknTEEwc2JgdzSyDpw6L9DPV-2Q2EoeUNKu82YXPfM/exec";
 let editingTxId = null;
 let machineRates = [];
-let activeSaveKey = null;
 
 const TABLES={
   transactions:"LANCAMENTOS",categories:"CATEGORIAS",accounts:"CONTAS",cards:"CARTOES",
@@ -16,11 +15,12 @@ async function api(action,payload={}){
   // Autenticação usa GET porque o Google Apps Script redireciona Web Apps
   // e isso evita problemas de CORS/preflight no navegador. As operações
   // de dados continuam usando POST.
-  const isAuth = action === "login" || action === "signup" || action === "health";
+  const isHealth = action === "health";
+  const isAuth = action === "login" || action === "signup";
   let url = API_URL;
-  const options = { method: isAuth ? "GET" : "POST" };
-  if(isAuth){
-    const params = new URLSearchParams({action, ...Object.fromEntries(Object.entries(payload).map(([k,v])=>[k,String(v??"")]))});
+  const options = { method: isHealth ? "GET" : "POST" };
+  if(isHealth){
+    const params = new URLSearchParams({action});
     url += "?" + params.toString();
   }else{
     options.headers={"Content-Type":"text/plain;charset=utf-8"};
@@ -41,15 +41,7 @@ async function api(action,payload={}){
   }
   const text=await res.text();
   let data;
-  try{
-    data=JSON.parse(text);
-  }catch{
-    const detail=text||"Resposta vazia do Apps Script.";
-    throw new Error(`Resposta inválida do Apps Script (${res.status}). ${detail.slice(0,300)}`);
-  }
-  if(!res.ok){
-    throw new Error(data?.error||`Apps Script respondeu HTTP ${res.status}.`);
-  }
+  try{data=JSON.parse(text)}catch{throw new Error(text||"Resposta inválida do Apps Script.");}
   if(data?.success===false){
     const message=data.error||"Erro no Apps Script.";
     if(/sessão|sessao|acesso negado|usuário não informado|usuario nao informado/i.test(message) && !isAuth){
@@ -266,72 +258,64 @@ async function signup(e){
   }
 }
 
-function normalizeCategory(c){
-  const typeRaw=String(c?.type||"").trim().toLowerCase();
-  const typeMap={
-    income:"entrada", receita:"entrada", entrada:"entrada",
-    expense:"saida", despesa:"saida", saída:"saida", saida:"saida",
-    both:"ambos", ambos:"ambos"
-  };
-  return {...c,name:String(c?.name||"").trim(),type:typeMap[typeRaw]||typeRaw};
-}
-function deduplicateCategories(rows){
+async function deduplicateCategories(rows){
   const seen=new Map();
-  for(const raw of (rows||[])){
-    const c=normalizeCategory(raw);
-    if(!c.name) continue;
-    const key=`${c.name.toLocaleLowerCase("pt-BR")}::${c.type.toLocaleLowerCase("pt-BR")}`;
-    if(!seen.has(key)) seen.set(key,c);
+  const duplicates=[];
+  for(const c of (rows||[])){
+    const key=`${String(c.name||"").trim().toLocaleLowerCase("pt-BR")}::${String(c.type||"").trim().toLocaleLowerCase("pt-BR")}`;
+    if(!key || key.startsWith("::")) continue;
+    if(seen.has(key)) duplicates.push(c);
+    else seen.set(key,c);
+  }
+  if(duplicates.length){
+    for(const c of duplicates){
+      try{ await deleteDoc(doc(null,"categories",c.id)); }
+      catch(err){ console.warn("Não foi possível remover categoria duplicada",c.id,err); }
+    }
   }
   return Array.from(seen.values());
 }
 
 async function load(){
   if(!user?.uid) return;
+  // Toda consulta é filtrada pelo UID para manter os dados de cada usuário separados na planilha.
   const uid=user.uid;
-  // Uma única chamada ao Apps Script para os dados iniciais.
-  // Mantém a mesma estrutura de dados do carregamento anterior.
-  const r=await api("bootstrap",{});
-  if(!r || !r.success || !r.data) throw new Error(r?.error||"Não foi possível carregar os dados financeiros.");
-
-  const d=r.data||{};
-  categories=deduplicateCategories(d.categories||[]);
-  categories.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
+  const results=await Promise.all([
+    sb.from("categories").select("*").eq("user_id",uid),
+    sb.from("accounts").select("*").eq("user_id",uid),
+    sb.from("cards").select("*").eq("user_id",uid),
+    sb.from("recurring").select("*,categories(name)").eq("user_id",uid),
+    sb.from("goals").select("*").eq("user_id",uid),
+    sb.from("transactions").select("*,categories(name),accounts(name),cards(name)").eq("user_id",uid).limit(3000),
+    sb.from("machine_rates").select("*").eq("user_id",uid)
+  ]);
+  const [a,b,c,d,e,f,g]=results;
+  const names=["categories","accounts","cards","recurring","goals","transactions","machine_rates"];
+  [a,b,c,d,e,f].forEach((r,i)=>{if(r.error) console.error("Erro ao carregar "+names[i],r.error)});
+  categories=await deduplicateCategories(a.data||[]);categories.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
   categoriesCache=categories;
-
-  accounts=(d.accounts||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
+  accounts=(b.data||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
   accountsCache=accounts;
-
-  cards=(d.cards||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
+  cards=(c.data||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
   cardsCache=cards;
-
-  recurring=d.recurring||[];
-  goals=d.goals||[];
-  txs=(d.transactions||[]).map(x=>{joinRelations("transactions",x);return x;});
-  machineRates=d.machine_rates||[];
-
-  // Se a conta ainda não tiver categorias, cria as padrão pelo próprio Apps Script.
-  // Não usamos mais a camada legada `sb` neste carregamento.
   if(!categories.length){
-    const defaults=[
-      ["Salário","entrada"],["Extra","entrada"],["Reembolso","entrada"],["Outros recebimentos","entrada"],
-      ["Casa","saida"],["Mercado","saida"],["Alimentação","saida"],["Carro","saida"],["Combustível","saida"],
-      ["Contas","saida"],["Celular/Internet","saida"],["Cartão","saida"],["Lazer","saida"],["Compras","saida"],
-      ["Pets","saida"],["Família","saida"],["Investimentos","saida"],["Outros","saida"]
-    ];
-    try{
-      const created=[];
-      for(const [name,type] of defaults){
-        const r=await api("create",{sheet:"CATEGORIAS",record:{user_id:uid,name,type,active:true}});
-        if(r?.data) created.push(normalizeCategory(r.data));
-      }
-      categories=deduplicateCategories(created);
+    const defaults=[['Salário','entrada'],['Extra','entrada'],['Reembolso','entrada'],['Outros recebimentos','entrada'],['Casa','saida'],['Mercado','saida'],['Alimentação','saida'],['Carro','saida'],['Combustível','saida'],['Contas','saida'],['Celular/Internet','saida'],['Cartão','saida'],['Lazer','saida'],['Compras','saida'],['Pets','saida'],['Família','saida'],['Investimentos','saida'],['Outros','saida']];
+    const seed=await sb.from("categories").insert(defaults.map(([name,type])=>({user_id:uid,name,type})));
+    if(seed.error) console.error("Erro ao criar categorias padrão",seed.error);
+    else {
+      const fresh=await sb.from("categories").select("*").eq("user_id",uid);
+      categories=await deduplicateCategories(fresh.data||[]);categories.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
       categoriesCache=categories;
-    }catch(err){
-      console.error("Erro ao criar categorias padrão:",err);
     }
   }
-  renderAll();
+  recurring=d.data||[];
+  goalsList=e.data||[];
+  txs=f.data||[];
+  machineRates=(g.data||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
+  txs.sort((x,y)=>String(y.transaction_date||"").localeCompare(String(x.transaction_date||"")));
+  txs.forEach(t=>joinRelations("transactions",t));
+  recurring.forEach(r=>joinRelations("recurring",r));
+  fill();render();window.__reluzLoaded=true
 }
 function fill(){
   fillCategorySelects();
@@ -352,7 +336,7 @@ function updateMetalFields(){
   const isPedido=String(cat?.name||"").trim().toLowerCase()==="pedido";
   el.classList.toggle("hidden",!isPedido);
 }
-function fillCategorySelects(){const type=$("txType")?.value||"saida";const available=categories.map(normalizeCategory).filter(c=>c.type==="ambos"||c.type===type);$("txCat").innerHTML=available.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join("")||'<option value="">Cadastre uma categoria primeiro</option>';const recurringType=$("recType")?.value||"saida";const recurringCats=categories.filter(c=>c.type==="ambos"||c.type===recurringType);$("recCat").innerHTML=recurringCats.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join("")||'<option value="">Cadastre uma categoria primeiro</option>';updateMetalFields()}
+function fillCategorySelects(){const type=$("txType")?.value||"saida";const available=categories.filter(c=>c.type==="ambos"||c.type===type);$("txCat").innerHTML=available.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join("")||'<option value="">Cadastre uma categoria primeiro</option>';const recurringType=$("recType")?.value||"saida";const recurringCats=categories.filter(c=>c.type==="ambos"||c.type===recurringType);$("recCat").innerHTML=recurringCats.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join("")||'<option value="">Cadastre uma categoria primeiro</option>';updateMetalFields()}
 async function saveCategory(e){
   e.preventDefault();
   msg("catMsg","");
@@ -536,12 +520,12 @@ function closeEditTxModal(){
 function clearTxForm(){
   const wasEditing=!!editingTxId;
   if(wasEditing) closeEditTxModal();
-  editingTxId=null;activeSaveKey=null;$('txForm')?.reset();$("txDate").value=today;$('txPaidDate').value="";$('txPaidAmount').value="";$('txMetalValue').value="";$('txInitialKg').value="";$('txFinalKg').value="";
+  editingTxId=null;$('txForm')?.reset();$("txDate").value=today;$('txPaidDate').value="";$('txPaidAmount').value="";$('txMetalValue').value="";$('txInitialKg').value="";$('txFinalKg').value="";
   const submitBtn=$("txForm button[type=submit]");if(submitBtn)submitBtn.textContent="Salvar lançamento";$("txMsg").textContent="";initPaymentBreakdown();updateMetalFields();
 }
 async function editTx(id){
   const t=txs.find(x=>String(x.id)===String(id)); if(!t)return msg("txMsg","Lançamento não encontrado.");
-  editingTxId=String(id); activeSaveKey=null; page('lancamentos');
+  editingTxId=String(id); page('lancamentos');
   // O modal usa o mesmo formulário completo, mas isolado da tela de novo lançamento.
   openEditTxModal();
   setSelectValue("txType",t.type||"saida");
@@ -590,62 +574,11 @@ async function saveTxCore(e){
  const categoryName=categories.find(c=>c.id===$('txCat').value)?.name||"";
  const base={user_id:user.uid,type:$('txType').value,amount:total,original_amount:total,transaction_date:$('txDate').value,competence_date:$('txDate').value,paid_date:$('txPaidDate').value||null,category_id:$('txCat').value,subcategory:$('txSubcategory').value||null,account_id:$('txAccount').value||null,card_id:$('txCard').value||null,payment_method:method,status,name:$('txName').value.trim(),description:$('txDesc').value.trim()||null,notes:$('txNotes').value||null,dre_class:$('txDreClass')?.value||($('txType').value==='entrada'?'receita':'despesa_operacional'),attachment_url:attachmentUrl,recurrence:$('txRecurring').value,group_id:g,payment_parts:parts,payment_received_amount:target,payment_fee_total:parts.reduce((s,p)=>s+p.amount*(p.fee_percent||0)/100,0),metal_value:+($("txMetalValue")?.value||0)||0,initial_kg:+($("txInitialKg")?.value||0)||0,final_kg:+($("txFinalKg")?.value||0)||0,category_name:categoryName};
  if(editingTxId){
-   const current=txs.find(t=>t.id===editingTxId)||{};
-   if(!current || !current.id) throw new Error("Lançamento não encontrado para edição.");
-
-   const totalFee=parts.reduce((s,p)=>s+(Number(p.amount)||0)*(Number(p.fee_percent)||0)/100,0);
-   const netTotal=Math.max(0,total-totalFee);
-   const editStatus=status || current.status || "pago";
-   const editReceived=
-     editStatus==="pendente" ? 0 :
-     editStatus==="parcial" ? Math.min(total,Math.max(0,target)) :
-     total;
-
-   const editRecord={
-     ...base,
-     amount:netTotal,
-     original_amount:total,
-     status:editReceived>=total-0.01?"pago":(editReceived>0?"parcial":"pendente"),
-     edited_at:new Date().toISOString(),
-     installment_number:current.installment_number||1,
-     installment_total:current.installment_total||1
-   };
-
-   // Keep the existing payment state during a normal edit. Payment changes
-   // continue to use the dedicated payment UI/logic.
-   delete editRecord.payment_parts;
-   delete editRecord.payment_received_amount;
-   delete editRecord.payment_fee_total;
-   delete editRecord.remaining_amount;
-
-   // `base` contains payment_parts for the form, but a normal edit must
-   // not enter the payment-children replacement path. Only send payment_parts
-   // when the user is explicitly editing a multiple-payment transaction.
-   if(method==="multiple"){
-     // Multiple-payment edits remain handled by the payment-specific flow.
-     editRecord.payment_parts=parts;
-   }
-
-   // Edição usa o endpoint genérico de UPDATE já existente no Apps Script.
-   // Não passa pelo fluxo de criação nem por dedupe_key.
-   const r=await api("update_simple_transaction",{
-     id:editingTxId,
-     record:editRecord
-   });
-
-   if(!r || !r.success){
-     throw new Error(r?.error || "O Apps Script não confirmou a atualização.");
-   }
-   if(!r.data){
-     throw new Error("O Apps Script respondeu sem confirmar o lançamento atualizado.");
-   }
-
-   activeSaveKey=null;
-   msg("txMsg","Lançamento atualizado.");
-   clearTxForm();
-   await load();
-   return;
-}
+   const ref=doc(null,"transactions",editingTxId);const current=txs.find(t=>t.id===editingTxId)||{};
+   const fee=parts[0]?.fee_percent||0, net=total-total*fee/100;
+   await updateDoc(ref,{...base,amount:net,original_amount:total,fee_percent:fee,edited_at:serverTimestamp(),installment_number:current.installment_number||1,installment_total:current.installment_total||1});
+   msg("txMsg","Lançamento atualizado.");clearTxForm();await load();return;
+ }
  let rows=[];
  for(const part of parts.length?parts:[{method,amount:target,card_id:$('txCard').value||null,rate_id:null,installments:1,fee_percent:0}]){
    const inst=Math.max(1,part.installments||1);
@@ -662,7 +595,7 @@ async function saveTxCore(e){
      rows.push({...base,amount:part.amount,original_amount:part.amount,transaction_date:$('txPaidDate').value||$('txDate').value,competence_date:$('txDate').value,paid_date:$('txPaidDate').value||$('txDate').value,status:status==='parcial'?'pago':status,payment_method:part.method,card_id:part.card_id||null,rate_id:part.rate_id||null,fee_percent:part.fee_percent||0,payment_received_amount:part.amount,installment_number:1,installment_total:1,group_id:g});
    }
  }
- const dedupeKey=activeSaveKey||(activeSaveKey=crypto.randomUUID());
+ const dedupeKey=await sha256(JSON.stringify({user_id:user.uid,type:base.type,total,transaction_date:base.transaction_date,category_id:base.category_id,name:base.name,description:base.description,payment_method:method,status,payment_parts:parts.map(p=>({method:p.method,amount:+p.amount||0,card_id:p.card_id||null,installments:+p.installments||1,fee_percent:+p.fee_percent||0,rate_id:p.rate_id||null}))}));
  let r;
  // Formas múltiplas/parciais usam a estrutura própria do Apps Script:
  // LANCAMENTOS + RECEBIMENTOS + PARCELAS. Isso evita gravar datas/valores
@@ -688,20 +621,7 @@ async function saveTxCore(e){
    // Lançamento simples: grava diretamente um registro.
    // Não usa o fluxo de múltiplas parcelas, evitando que um lançamento
    // novo seja tratado acidentalmente como edição.
-   const simpleFee=parts.reduce((s,p)=>s+(Number(p.amount)||0)*(Number(p.fee_percent)||0)/100,0);
-   const simpleGross=(status==='pendente')?total:total;
-   const simpleNet=Math.max(0,simpleGross-simpleFee);
-   const simpleRow = {
-     ...rows[0],
-     ...base,
-     amount:simpleNet,
-     original_amount:simpleGross,
-     payment_received_amount:status==='pendente'?0:simpleGross,
-     remaining_amount:status==='pendente'?simpleGross:0,
-     payment_fee_total:simpleFee,
-     status:status==='pendente'?'pendente':'pago',
-     fee_percent:parts.length===1?Number(parts[0].fee_percent||0):0
-   };
+   const simpleRow = rows[0] || {...base, amount:target, original_amount:target};
    r=await api("save_transaction",{
      user_id:user.uid,
      dedupe_key:dedupeKey,
@@ -711,7 +631,6 @@ async function saveTxCore(e){
  if(r?.success===false){msg("txMsg",r.error||"Não foi possível salvar o lançamento.");return;}
  if(r?.duplicate){msg("txMsg","Este lançamento já foi salvo. A duplicidade foi bloqueada.");return;}
  msg("txMsg", "Lançamento salvo com sucesso.");
- activeSaveKey=null;
  clearTxForm();
  await load();
 }

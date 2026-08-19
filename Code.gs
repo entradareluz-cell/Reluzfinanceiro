@@ -61,11 +61,6 @@ function ss_() {
 function now_() {
   return Utilities.formatDate(new Date(), CONFIG.TIMEZONE, "yyyy-MM-dd HH:mm:ss");
 }
-
-function normalizeEmail_(email) {
-  return String(email || "").trim().toLowerCase();
-}
-
 function today_() {
   return Utilities.formatDate(new Date(), CONFIG.TIMEZONE, "yyyy-MM-dd");
 }
@@ -455,60 +450,31 @@ function replacePaymentChildren_(userId, transactionId, transaction, payments) {
 }
 
 function updateTransaction_(userId, id, record) {
-  const current = assertOwned_(TABLES.LANCAMENTOS, id, normalizeEmail_(userId));
+  const current = find_(TABLES.LANCAMENTOS, id);
+  if (!current) throw new Error("Lançamento não encontrado.");
+  if (current.user_id && !userKeys_(userId).some(k => String(current.user_id) === String(k))) {
+    throw new Error("Lançamento não pertence ao usuário.");
+  }
   const patch = Object.assign({}, record || {});
   delete patch.user_id;
-
   if (patch.amount !== undefined) patch.amount = Number(patch.amount) || 0;
   if (patch.original_amount !== undefined) patch.original_amount = Number(patch.original_amount) || 0;
   if (patch.payment_received_amount !== undefined) patch.payment_received_amount = Number(patch.payment_received_amount) || 0;
   if (patch.payment_fee_total !== undefined) patch.payment_fee_total = Number(patch.payment_fee_total) || 0;
-
   if (patch.transaction_date) patch.transaction_date = dateOnly_(patch.transaction_date);
   if (patch.competence_date) patch.competence_date = dateOnly_(patch.competence_date);
   if (patch.paid_date) patch.paid_date = dateOnly_(patch.paid_date);
 
-  const original =
-    Number(patch.original_amount || current.original_amount || patch.amount || current.amount || 0) || 0;
-
-  if (original <= 0) throw new Error("Valor do lançamento deve ser maior que zero.");
-
   if (patch.payment_parts !== undefined) {
     const parts = normalizePaymentParts_(patch.payment_parts);
     const child = replacePaymentChildren_(userId, id, Object.assign({}, current, patch), parts);
-
-    if (child.totalReceived > original + 0.01) {
-      throw new Error("A soma dos pagamentos não pode ultrapassar o valor do lançamento.");
-    }
-
     patch.payment_parts = parts;
     patch.payment_received_amount = child.totalReceived;
     patch.payment_fee_total = child.totalFee;
-    patch.original_amount = original;
+    const original = Number(patch.original_amount || current.original_amount || patch.amount || current.amount || 0) || 0;
     patch.remaining_amount = Math.max(0, original - child.totalReceived);
-    patch.status = patch.remaining_amount <= 0.01 ? "pago" : "parcial";
-  } else {
-    const status = String(patch.status || current.status || "").toLowerCase();
-    if (status === "pendente") {
-      patch.payment_received_amount = 0;
-    } else if (status === "parcial") {
-      patch.payment_received_amount = Math.min(
-        original,
-        Number(patch.payment_received_amount ?? current.payment_received_amount) || 0
-      );
-    } else {
-      patch.payment_received_amount = original;
-      patch.status = "pago";
-    }
-    patch.original_amount = original;
-    patch.remaining_amount = Math.max(0, original - patch.payment_received_amount);
-    if (patch.remaining_amount <= 0.01) {
-      patch.remaining_amount = 0;
-      patch.status = "pago";
-      patch.payment_received_amount = original;
-    }
+    if (patch.status === undefined || patch.status === "") patch.status = patch.remaining_amount > 0 ? "parcial" : "pago";
   }
-
   return update_(TABLES.LANCAMENTOS, id, patch);
 }
 
@@ -616,26 +582,9 @@ function saveMultiplePayments_(userId, transaction, payments, dedupeKey) {
 }
 
 function addMonths_(dateValue, months) {
-  const raw = String(dateValue || "").trim();
-  const m = Number(months || 0);
-
-  if (!raw) return today_();
-
-  // Datas YYYY-MM-DD são tratadas como calendário, evitando deslocamentos
-  // de fuso horário do navegador.
-  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (match) {
-    const y = Number(match[1]), month = Number(match[2]) - 1, day = Number(match[3]);
-    const d = new Date(Date.UTC(y, month, 1));
-    d.setUTCMonth(d.getUTCMonth() + m);
-    const lastDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
-    d.setUTCDate(Math.min(day, lastDay));
-    return Utilities.formatDate(d, CONFIG.TIMEZONE, 'yyyy-MM-dd');
-  }
-
-  const d = new Date(raw);
-  if (isNaN(d.getTime())) return today_();
-  d.setMonth(d.getMonth() + m);
+  const d = new Date(dateValue);
+  if (isNaN(d.getTime())) return now_();
+  d.setMonth(d.getMonth() + Number(months || 0));
   return Utilities.formatDate(d, CONFIG.TIMEZONE, 'yyyy-MM-dd');
 }
 
@@ -826,43 +775,14 @@ function saveTransaction_(userId, record, dedupeKey) {
     const rec = Object.assign({}, record || {});
     delete rec.user_id;
     rec.user_id = uid;
-
-    rec.original_amount = Number(rec.original_amount || rec.amount) || 0;
     rec.amount = Number(rec.amount) || 0;
-    rec.payment_fee_total = Number(rec.payment_fee_total) || 0;
-
-    if (rec.original_amount <= 0 || rec.amount <= 0) {
-      throw new Error("Valor do lançamento deve ser maior que zero.");
-    }
-
-    // Para lançamento simples, "pago" significa que o valor bruto foi
-    // liquidado; a taxa reduz apenas o valor líquido contabilizado.
-    if (String(rec.status || "").toLowerCase() === "pendente") {
-      rec.payment_received_amount = 0;
-    } else if (String(rec.status || "").toLowerCase() === "parcial") {
-      rec.payment_received_amount = Number(rec.payment_received_amount) || 0;
-    } else {
-      rec.payment_received_amount = rec.original_amount;
-      rec.status = "pago";
-    }
-
-    if (rec.payment_received_amount < 0) {
-      throw new Error("Valor recebido não pode ser negativo.");
-    }
-    if (rec.payment_received_amount > rec.original_amount + 0.01) {
-      throw new Error("Valor recebido não pode ultrapassar o valor original.");
-    }
-
-    rec.remaining_amount = Math.max(
-      0,
-      rec.original_amount - rec.payment_received_amount
-    );
-
-    if (rec.status === "parcial" && rec.remaining_amount <= 0.01) {
-      rec.status = "pago";
-      rec.payment_received_amount = rec.original_amount;
-      rec.remaining_amount = 0;
-    }
+    rec.original_amount = Number(rec.original_amount || rec.amount) || 0;
+    rec.payment_received_amount = Number(rec.payment_received_amount || 0) || 0;
+    rec.payment_fee_total = Number(rec.payment_fee_total || 0) || 0;
+    rec.remaining_amount = Math.max(0, rec.original_amount - rec.payment_received_amount);
+    if (!rec.status) rec.status = rec.remaining_amount > 0 ? "parcial" : "pago";
+    if (rec.payment_received_amount > rec.original_amount) throw new Error("Valor recebido não pode ultrapassar o valor original.");
+    if (!rec.amount) throw new Error("Valor do lançamento deve ser maior que zero.");
 
     if (rec.transaction_date) rec.transaction_date = dateOnly_(rec.transaction_date);
     if (rec.competence_date) rec.competence_date = dateOnly_(rec.competence_date);
@@ -870,25 +790,17 @@ function saveTransaction_(userId, record, dedupeKey) {
 
     const key = String(dedupeKey || rec.dedupe_key || "").trim();
     if (key) {
-      const existing = list_(TABLES.LANCAMENTOS, uid)
-        .find(r =>
-          String(r.dedupe_key || "") === key &&
-          (!rec.id || String(r.id) !== String(rec.id))
-        );
-      if (existing) {
-        return {duplicate:true, id:existing.id, data:[existing]};
-      }
+      const existing = list_(TABLES.LANCAMENTOS, uid).find(r => String(r.dedupe_key || "") === key);
+      if (existing) return {duplicate:true, id:existing.id, data:[existing]};
       rec.dedupe_key = key;
     }
 
-    // IDs existentes são tratados como edição somente se pertencerem ao usuário.
+    // Se vier um id, só atualiza se o registro realmente existir.
+    // Para lançamento novo, o id é sempre gerado pelo create_.
     if (rec.id) {
       const current = find_(TABLES.LANCAMENTOS, rec.id);
       if (current) {
-        assertOwned_(TABLES.LANCAMENTOS, rec.id, uid);
-        const updated = updateTransaction_(uid, rec.id, rec);
-        audit_(uid, "update", TABLES.LANCAMENTOS, rec.id, updated);
-        return {duplicate:false, data:[updated], id:updated.id};
+        return {duplicate:false, data:updateTransaction_(uid, rec.id, rec)};
       }
       delete rec.id;
     }
