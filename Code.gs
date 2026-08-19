@@ -24,6 +24,7 @@ const TABLES = {
   SUBCATEGORIAS: "SUBCATEGORIAS",
   RECEBIMENTOS: "RECEBIMENTOS",
   PARCELAS: "PARCELAS",
+  CONTAS_RECEBER: "CONTAS_RECEBER",
   CLIENTES: "CLIENTES",
   FORNECEDORES: "FORNECEDORES",
   CENTROS_CUSTO: "CENTROS_CUSTO",
@@ -44,6 +45,7 @@ const INITIAL_HEADERS = {
   SUBCATEGORIAS: ["id","user_id","category_id","name","active","created_at","updated_at"],
   RECEBIMENTOS: ["id","lancamento_id","user_id","method","amount","card_id","installments","fee_percent","fee_value","net_amount","rate_id","date","notes","created_at"],
   PARCELAS: ["id","lancamento_id","user_id","installment_number","installment_total","transaction_date","competence_date","paid_date","amount","original_amount","fee_percent","payment_fee_total","status","account_id","card_id","created_at","updated_at"],
+  CONTAS_RECEBER: ["id","lancamento_id","user_id","installment_id","installment_number","installment_total","description","expected_date","transaction_date","competence_date","paid_date","amount","original_amount","fee_percent","fee_value","net_amount","status","account_id","card_id","payment_method","created_at","updated_at"],
   CLIENTES: ["id","user_id","name","cpf_cnpj","phone","email","active","created_at","updated_at"],
   FORNECEDORES: ["id","user_id","name","cpf_cnpj","phone","email","active","created_at","updated_at"],
   CENTROS_CUSTO: ["id","user_id","name","code","budget","active","created_at","updated_at"],
@@ -481,6 +483,9 @@ function replacePaymentChildren_(userId, transactionId, transaction, payments) {
   list_(TABLES.PARCELAS, uid)
     .filter(r => String(r.lancamento_id) === String(transactionId))
     .forEach(r => delete_(TABLES.PARCELAS, r.id));
+  list_(TABLES.CONTAS_RECEBER, uid)
+    .filter(r => String(r.lancamento_id) === String(transactionId))
+    .forEach(r => delete_(TABLES.CONTAS_RECEBER, r.id));
 
   const parts = normalizePaymentParts_(payments);
   let totalReceived = 0, totalFee = 0;
@@ -501,8 +506,8 @@ function replacePaymentChildren_(userId, transactionId, transaction, payments) {
     if (totalInstallments > 1) {
       const installmentAmount = amount / totalInstallments;
       for (let i=1;i<=totalInstallments;i++) {
-        const installmentDate = addMonths_(payment.date || transaction.transaction_date || today_(), i-1);
-        create_(TABLES.PARCELAS, {
+        const installmentDate = addMonths_(payment.date || transaction.transaction_date || today_(), i);
+        const installment = create_(TABLES.PARCELAS, {
           id:id_(), lancamento_id:transactionId, user_id:uid,
           installment_number:i, installment_total:totalInstallments,
           transaction_date:installmentDate, competence_date:installmentDate, paid_date:"",
@@ -511,10 +516,57 @@ function replacePaymentChildren_(userId, transactionId, transaction, payments) {
           status:"pendente", account_id:payment.account_id || transaction.account_id || "",
           card_id:payment.card_id || "", created_at:now_(), updated_at:now_()
         });
+        create_(TABLES.CONTAS_RECEBER, {
+          id:id_(), lancamento_id:transactionId, user_id:uid,
+          installment_id:installment.id,
+          installment_number:i, installment_total:totalInstallments,
+          description:transaction.description || transaction.name || "Recebimento parcelado",
+          expected_date:installmentDate, transaction_date:installmentDate,
+          competence_date:installmentDate, paid_date:"",
+          amount:installmentAmount, original_amount:installmentAmount,
+          fee_percent:feePercent,
+          fee_value:installmentAmount*feePercent/100,
+          net_amount:installmentAmount-(installmentAmount*feePercent/100),
+          status:"a_receber",
+          account_id:payment.account_id || transaction.account_id || "",
+          card_id:payment.card_id || "",
+          payment_method:payment.method || payment.payment_method || "",
+          created_at:now_(), updated_at:now_()
+        });
       }
     }
   });
   return {totalReceived,totalFee,parts};
+}
+
+function updateSimpleTransaction_(userId, id, record) {
+  const current = assertOwned_(TABLES.LANCAMENTOS, id, normalizeEmail_(userId));
+  const patch = Object.assign({}, record || {});
+  delete patch.id;
+  delete patch.user_id;
+
+  // Edição simples: preserva o estado de pagamento existente. Só altera
+  // os campos enviados pelo formulário e nunca cria outro lançamento.
+  if (patch.amount !== undefined) patch.amount = Number(patch.amount) || 0;
+  if (patch.original_amount !== undefined) patch.original_amount = Number(patch.original_amount) || 0;
+  if (patch.transaction_date) patch.transaction_date = dateOnly_(patch.transaction_date);
+  if (patch.competence_date) patch.competence_date = dateOnly_(patch.competence_date);
+  if (patch.paid_date) patch.paid_date = dateOnly_(patch.paid_date);
+
+  // Não deixar a edição normal substituir os campos de pagamento por valores
+  // calculados no navegador.
+  delete patch.payment_parts;
+  delete patch.payment_received_amount;
+  delete patch.payment_fee_total;
+  delete patch.remaining_amount;
+
+  if (patch.amount !== undefined && patch.amount <= 0) {
+    throw new Error("Valor do lançamento deve ser maior que zero.");
+  }
+
+  const updated = update_(TABLES.LANCAMENTOS, id, patch);
+  audit_(normalizeEmail_(userId), "update", TABLES.LANCAMENTOS, id, updated);
+  return updated;
 }
 
 function updateTransaction_(userId, id, record) {
@@ -642,6 +694,7 @@ function saveMultiplePayments_(userId, transaction, payments, dedupeKey) {
     });
 
     const installments = [];
+    const receivables = [];
     payments.forEach(payment => {
       const totalInstallments = Math.max(1, Number(payment.installments) || 1);
       if (totalInstallments <= 1) return;
@@ -649,8 +702,8 @@ function saveMultiplePayments_(userId, transaction, payments, dedupeKey) {
       const installmentAmount = amount / totalInstallments;
       const feePercent = Number(payment.fee_percent) || 0;
       for (let i=1; i<=totalInstallments; i++) {
-        const installmentDate = addMonths_(payment.date || transaction.transaction_date || now_(), i-1);
-        installments.push(create_(TABLES.PARCELAS, {
+        const installmentDate = addMonths_(payment.date || transaction.transaction_date || now_(), i);
+        const installment = create_(TABLES.PARCELAS, {
           id:id_(),
           lancamento_id:transactionId,
           user_id:uid,
@@ -668,11 +721,39 @@ function saveMultiplePayments_(userId, transaction, payments, dedupeKey) {
           card_id:payment.card_id || '',
           created_at:now_(),
           updated_at:now_()
+        });
+        installments.push(installment);
+
+        // Cada parcela também vira uma conta a receber independente.
+        // A data prevista é a data em que o dinheiro deve cair na conta.
+        receivables.push(create_(TABLES.CONTAS_RECEBER, {
+          id:id_(),
+          lancamento_id:transactionId,
+          user_id:uid,
+          installment_id:installment.id,
+          installment_number:i,
+          installment_total:totalInstallments,
+          description:transaction.description || transaction.name || 'Recebimento parcelado',
+          expected_date:installmentDate,
+          transaction_date:installmentDate,
+          competence_date:installmentDate,
+          paid_date:'',
+          amount:installmentAmount,
+          original_amount:installmentAmount,
+          fee_percent:feePercent,
+          fee_value:installmentAmount*feePercent/100,
+          net_amount:installmentAmount-(installmentAmount*feePercent/100),
+          status:'a_receber',
+          account_id:payment.account_id || transaction.account_id || '',
+          card_id:payment.card_id || '',
+          payment_method:payment.method || payment.payment_method || '',
+          created_at:now_(),
+          updated_at:now_()
         }));
       }
     });
 
-    return {duplicate:false, transaction:main, recebimentos:received, parcelas:installments};
+    return {duplicate:false, transaction:main, recebimentos:received, parcelas:installments, contas_a_receber:receivables};
   } finally {
     lock.releaseLock();
   }
@@ -831,6 +912,21 @@ function doPost(e) {
     if(action==="save_transaction") return out_({success:true,data:saveTransaction_(uid,p.record||{},p.dedupe_key||"")});
     if(action==="save_transactions") return out_(Object.assign({success:true},saveTransactions_(uid,p.dedupe_key||"",p.rows||[])));
     if(action==="save_multiple_payments") return out_(Object.assign({success:true},saveMultiplePayments_(uid,p.transaction||{},p.payments||[],p.dedupe_key||"")));
+    if(action==="mark_receivable_paid"){
+      const r=assertOwned_(TABLES.CONTAS_RECEBER,p.id,uid);
+      const patch={
+        status:"recebido",
+        paid_date:dateOnly_(p.paid_date||today_()),
+        updated_at:now_()
+      };
+      const data=update_(TABLES.CONTAS_RECEBER,p.id,patch);
+      // Mantém a parcela original sincronizada.
+      if(r.installment_id){
+        try{ assertOwned_(TABLES.PARCELAS,r.installment_id,uid); update_(TABLES.PARCELAS,r.installment_id,{status:"pago",paid_date:patch.paid_date}); }catch(_){}
+      }
+      audit_(uid,"receive",TABLES.CONTAS_RECEBER,p.id,data);
+      return out_({success:true,data});
+    }
 
     if(action==="create"){
       const sheet=assertWritable_(p.sheet,auth);
@@ -854,6 +950,10 @@ function doPost(e) {
       const data=updateTransaction_(uid,id,record);
       audit_(uid,"update",sheet,id,data);
       return out_({success:true,data:data});
+    }
+    if(action==="update_simple_transaction"){
+      const data=updateSimpleTransaction_(uid,p.id,p.record||{});
+      return out_({success:true,data});
     }
     if(action==="update"){
       const sheet=assertWritable_(p.sheet,auth);

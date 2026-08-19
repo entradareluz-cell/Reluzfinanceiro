@@ -1,13 +1,14 @@
 // RELUZ FINANCEIRO — autenticação e banco 100% via Google Sheets + Apps Script.
-const API_URL = "https://script.google.com/macros/s/AKfycbxTrYhj0tAfeMhgHkgZSnJWRgWKXve-8UGEb4hf4SaoSCGGf3FHtKuAssdtYZBQG20U/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbzmLkjT5WjqRbaq6oei0JoDIJn-_VeAaLEPERlAYt4g7zNpDHevtTCR86EterN-LhRW/exec";
 let editingTxId = null;
 let machineRates = [];
+let receivables = [];
 let activeSaveKey = null;
 
 const TABLES={
   transactions:"LANCAMENTOS",categories:"CATEGORIAS",accounts:"CONTAS",cards:"CARTOES",
   recurring:"RECORRENTES",goals:"METAS",machine_rates:"TAXAS",users:"USUARIOS",
-  subcategories:"SUBCATEGORIAS",receivings:"RECEBIMENTOS",installments:"PARCELAS",
+  subcategories:"SUBCATEGORIAS",receivings:"RECEBIMENTOS",installments:"PARCELAS",receivables:"CONTAS_RECEBER",
   clients:"CLIENTES",suppliers:"FORNECEDORES",cost_centers:"CENTROS_CUSTO",
   projects:"PROJETOS",orders:"PEDIDOS",audit:"AUDITORIA"
 };
@@ -191,30 +192,31 @@ document.addEventListener("DOMContentLoaded",async()=>{
   document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$("editTxModal")?.classList.contains('hidden')){closeEditTxModal();clearTxForm();}});
   $("dashMonth").onchange=dashboard;$("reportMonth").onchange=report;$("transferForm")?.addEventListener("submit",saveTransfer);$("excel").onclick=excel;$("pdf").onclick=pdf;
   document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>page(b.dataset.page));
-  try{
-    const {data,error}=await sb.auth.getSession();
-    if(error) throw error;
-    if(data.session) await start(data.session.user); else loginView();
-  }catch(err){console.error(err);loginView();msg("authMsg",friendlyError(err))}
+  // Segurança de entrada: a página não deve abrir o sistema com uma sessão
+  // antiga/localStorage. O usuário precisa confirmar o login nesta abertura.
+  clearSession();
+  loginView();
 });
 function loginView(){$("loginView").classList.remove("hidden");$("app").classList.add("hidden")}
 async function start(u){
   user=u;
   $("userName").textContent=u?.displayName||u?.email||"Usuário";
-  $("loginView").classList.add("hidden");
-  $("app").classList.remove("hidden");
-  page("dashboard");
-  // Mantém uma camada de carregamento até a primeira leitura terminar.
-  // Assim a tela nunca aparece "zerada" enquanto o Sheets ainda responde.
-  setAuthLoading(true,"Entrando na sua conta...","Conectando ao Google Sheets e carregando seus dados.");
+  setAuthLoading(true,"Carregando seu financeiro...","Login confirmado. Buscando categorias, contas, cartões e lançamentos.");
   try{
     await load(true);
+    $("loginView").classList.add("hidden");
+    $("app").classList.remove("hidden");
+    page("dashboard");
     setAuthLoading(false);
   }catch(err){
     console.error("Erro ao carregar dados após login:",err);
+    clearSession();
+    user=null;
+    $("app").classList.add("hidden");
+    $("loginView").classList.remove("hidden");
     setAuthLoading(false);
-    // Não limpa os dados existentes em caso de falha de leitura.
     msg("authMsg",friendlyError(err));
+    throw err;
   }
 }
 function setAuthLoading(on,title="Entrando na sua conta...",text="Conectando ao Google Sheets e carregando seus dados."){
@@ -307,17 +309,18 @@ async function load(initial=false){
 
   const uid=user.uid;
   const results=await Promise.all([
-    sb.from("categories").select("*").eq("user_id",uid),
-    sb.from("accounts").select("*").eq("user_id",uid),
-    sb.from("cards").select("*").eq("user_id",uid),
-    sb.from("recurring").select("*,categories(name)").eq("user_id",uid),
-    sb.from("goals").select("*").eq("user_id",uid),
-    sb.from("transactions").select("*,categories(name),accounts(name),cards(name)").eq("user_id",uid).limit(3000),
-    sb.from("machine_rates").select("*").eq("user_id",uid)
+    sb.from("categories").select("*"),
+    sb.from("accounts").select("*"),
+    sb.from("cards").select("*"),
+    sb.from("recurring").select("*,categories(name)"),
+    sb.from("goals").select("*"),
+    sb.from("transactions").select("*,categories(name),accounts(name),cards(name)").limit(3000),
+    sb.from("machine_rates").select("*"),
+    sb.from("receivables").select("*")
   ]);
 
-  const [a,b,c,d,e,f,g]=results;
-  const names=["categories","accounts","cards","recurring","goals","transactions","machine_rates"];
+  const [a,b,c,d,e,f,g,h]=results;
+  const names=["categories","accounts","cards","recurring","goals","transactions","machine_rates","receivables"];
 
   // Nunca substitua uma coleção por [] quando o Apps Script/Sheets falhar.
   // Isso era a causa da tela "zerada" durante o primeiro carregamento.
@@ -340,6 +343,7 @@ async function load(initial=false){
   const nextGoals=e.data||[];
   const nextTxs=f.data||[];
   const nextRates=(g.data||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
+  const nextReceivables=(h.data||[]).sort((x,y)=>String(x.expected_date||"").localeCompare(String(y.expected_date||"")));
 
   // Só depois de todas as leituras críticas terem sido confirmadas,
   // atualizamos o estado da aplicação.
@@ -355,7 +359,7 @@ async function load(initial=false){
     const seed=await sb.from("categories").insert(defaults.map(([name,type])=>({user_id:uid,name,type})));
     if(seed.error) console.error("Erro ao criar categorias padrão",seed.error);
     else {
-      const fresh=await sb.from("categories").select("*").eq("user_id",uid);
+      const fresh=await sb.from("categories").select("*");
       if(!fresh.error){
         categories=await deduplicateCategories(fresh.data||[]);
         categories.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
@@ -368,6 +372,7 @@ async function load(initial=false){
   goalsList=nextGoals;
   txs=nextTxs;
   machineRates=nextRates;
+  receivables=nextReceivables;
   txs.sort((x,y)=>String(y.transaction_date||"").localeCompare(String(x.transaction_date||"")));
   txs.forEach(t=>joinRelations("transactions",t));
   recurring.forEach(r=>joinRelations("recurring",r));
@@ -670,10 +675,8 @@ async function saveTxCore(e){
 
    // Edição usa o endpoint de update do Apps Script, que valida a
    // propriedade do lançamento e grava na mesma linha. Não cria outro ID.
-   const r=await api("update",{
-     sheet:"LANCAMENTOS",
+   const r=await api("update_simple_transaction",{
      id:editingTxId,
-     user_id:user.uid,
      record:editRecord
    });
 
