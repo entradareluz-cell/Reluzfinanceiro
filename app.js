@@ -12,6 +12,15 @@ const TABLES={
   projects:"PROJETOS",orders:"PEDIDOS",audit:"AUDITORIA"
 };
 function sheetName(table){return TABLES[table]||String(table||"").toUpperCase();}
+function normalizeApiResponse_(r){
+  if(r==null) throw new Error("Resposta vazia do Apps Script.");
+  if(typeof r==="string"){
+    try{r=JSON.parse(r)}catch(e){throw new Error("Resposta inválida do Apps Script.");}
+  }
+  if(r.error) throw new Error(r.error);
+  return r;
+}
+
 async function api(action,payload={}){
   // Autenticação usa GET porque o Google Apps Script redireciona Web Apps
   // e isso evita problemas de CORS/preflight no navegador. As operações
@@ -300,6 +309,13 @@ async function deduplicateCategories(rows){
   return Array.from(seen.values());
 }
 
+function rowsFromApi_(r){
+  if(Array.isArray(r)) return r;
+  if(Array.isArray(r?.data)) return r.data;
+  if(Array.isArray(r?.rows)) return r.rows;
+  return [];
+}
+
 async function load(){
   if(!user?.uid) return;
   // Toda consulta é filtrada pelo UID para manter os dados de cada usuário separados na planilha.
@@ -316,11 +332,11 @@ async function load(){
   const [a,b,c,d,e,f,g]=results;
   const names=["categories","accounts","cards","recurring","goals","transactions","machine_rates"];
   [a,b,c,d,e,f].forEach((r,i)=>{if(r.error) console.error("Erro ao carregar "+names[i],r.error)});
-  categories=await deduplicateCategories(a.data||[]);categories.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
+  categories=await deduplicateCategories(rowsFromApi_(a));categories.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
   categoriesCache=categories;
-  accounts=(b.data||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
+  accounts=(rowsFromApi_(b)).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
   accountsCache=accounts;
-  cards=(c.data||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
+  cards=(rowsFromApi_(c)).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
   cardsCache=cards;
   if(!categories.length){
     const defaults=[['Salário','entrada'],['Extra','entrada'],['Reembolso','entrada'],['Outros recebimentos','entrada'],['Casa','saida'],['Mercado','saida'],['Alimentação','saida'],['Carro','saida'],['Combustível','saida'],['Contas','saida'],['Celular/Internet','saida'],['Cartão','saida'],['Lazer','saida'],['Compras','saida'],['Pets','saida'],['Família','saida'],['Investimentos','saida'],['Outros','saida']];
@@ -328,14 +344,14 @@ async function load(){
     if(seed.error) console.error("Erro ao criar categorias padrão",seed.error);
     else {
       const fresh=await sb.from("categories").select("*").eq("user_id",uid);
-      categories=await deduplicateCategories(fresh.data||[]);categories.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
+      categories=await deduplicateCategories(rowsFromApi_(fresh));categories.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
       categoriesCache=categories;
     }
   }
-  recurring=d.data||[];
-  goalsList=e.data||[];
-  txs=f.data||[];
-  machineRates=(g.data||[]).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
+  recurring=rowsFromApi_(d);
+  goalsList=rowsFromApi_(e);
+  txs=rowsFromApi_(f);
+  machineRates=(rowsFromApi_(g)).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
   txs.sort((x,y)=>String(y.transaction_date||"").localeCompare(String(x.transaction_date||"")));
   txs.forEach(t=>joinRelations("transactions",t));
   recurring.forEach(r=>joinRelations("recurring",r));
