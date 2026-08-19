@@ -844,10 +844,14 @@ function doPost(e) {
       const id=String(p.id||"").trim();
       if(!id) throw new Error("ID do lançamento não informado.");
       assertOwned_(sheet,id,uid);
+
       const record=Object.assign({},p.record||{});
       delete record.user_id;
       delete record.id;
-      const data=update_(sheet,id,record);
+
+      // Mantém a mesma linha/ID e aplica as regras de lançamento.
+      // Não usa dedupe_key e nunca cria um novo lançamento.
+      const data=updateTransaction_(uid,id,record);
       audit_(uid,"update",sheet,id,data);
       return out_({success:true,data:data});
     }
