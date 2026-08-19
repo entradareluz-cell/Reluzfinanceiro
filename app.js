@@ -12,15 +12,6 @@ const TABLES={
   projects:"PROJETOS",orders:"PEDIDOS",audit:"AUDITORIA"
 };
 function sheetName(table){return TABLES[table]||String(table||"").toUpperCase();}
-function normalizeApiResponse_(r){
-  if(r==null) throw new Error("Resposta vazia do Apps Script.");
-  if(typeof r==="string"){
-    try{r=JSON.parse(r)}catch(e){throw new Error("Resposta inválida do Apps Script.");}
-  }
-  if(r.error) throw new Error(r.error);
-  return r;
-}
-
 async function api(action,payload={}){
   // Autenticação usa GET porque o Google Apps Script redireciona Web Apps
   // e isso evita problemas de CORS/preflight no navegador. As operações
@@ -209,9 +200,12 @@ document.addEventListener("DOMContentLoaded",async()=>{
 function loginView(){$("loginView").classList.remove("hidden");$("app").classList.add("hidden")}
 async function start(u){
   user=u;
-  // O login não deve ficar bloqueado pelo carregamento dos dados.
-  // Primeiro entra na aplicação; os dados são carregados em seguida.
-  $("userName").textContent=u?.displayName||u?.email||"Usuário";
+  try{
+    const r=await getDoc(doc(null,"users",u.uid));
+    $("userName").textContent=r.exists()?r.data().name:(u.displayName||u.email);
+  }catch(e){
+    $("userName").textContent=u?.displayName||u?.email||"Usuário";
+  }
   $("loginView").classList.add("hidden");
   $("app").classList.remove("hidden");
   setAuthLoading(false);
@@ -220,7 +214,6 @@ async function start(u){
     await load();
   }catch(err){
     console.error("Erro ao carregar dados após login:",err);
-    // O login continua válido mesmo que uma leitura de dados falhe.
     msg("authMsg",friendlyError(err));
   }
 }
@@ -291,116 +284,53 @@ async function signup(e){
   }
 }
 
+function normalizeCategory(c){
+  const raw=String(c?.type||"").trim().toLowerCase();
+  const typeMap={income:"entrada",receita:"entrada",entry:"entrada",entrada:"entrada",
+    expense:"saida",despesa:"saida",exit:"saida",saida:"saida","saída":"saida",
+    both:"ambos",ambos:"ambos"};
+  return {...c,name:String(c?.name||"").trim(),type:typeMap[raw]||raw};
+}
 async function deduplicateCategories(rows){
   const seen=new Map();
-  const duplicates=[];
-  for(const c of (rows||[])){
-    const key=`${String(c.name||"").trim().toLocaleLowerCase("pt-BR")}::${String(c.type||"").trim().toLocaleLowerCase("pt-BR")}`;
-    if(!key || key.startsWith("::")) continue;
-    if(seen.has(key)) duplicates.push(c);
-    else seen.set(key,c);
-  }
-  if(duplicates.length){
-    for(const c of duplicates){
-      try{ await deleteDoc(doc(null,"categories",c.id)); }
-      catch(err){ console.warn("Não foi possível remover categoria duplicada",c.id,err); }
-    }
+  for(const raw of (rows||[])){
+    const c=normalizeCategory(raw);
+    if(!c.name) continue;
+    const key=`${c.name.toLocaleLowerCase("pt-BR")}::${c.type.toLocaleLowerCase("pt-BR")}`;
+    if(!seen.has(key)) seen.set(key,c);
   }
   return Array.from(seen.values());
 }
-
-function rowsFromApi_(r){
-  if(Array.isArray(r)) return r;
-  if(Array.isArray(r?.data)) return r.data;
-  if(Array.isArray(r?.rows)) return r.rows;
-  return [];
-}
-
 async function load(){
   if(!user?.uid) return;
-  const uid=String(user.uid);
-
-  // Carrega diretamente pelo endpoint do Apps Script. Não usa a camada
-  // legada de consultas para evitar que filtros antigos façam categorias
-  // ou lançamentos desaparecerem.
-  const read=(sheet)=>api("list",{sheet}).then(r=>rowsFromApi_(r));
-
-  try{
-    const [
-      categoryRows, accountRows, cardRows,
-      recurringRows, goalRows, txRows, rateRows
-    ]=await Promise.all([
-      read("CATEGORIAS"),
-      read("CONTAS"),
-      read("CARTOES"),
-      read("RECORRENTES"),
-      read("METAS"),
-      read("LANCAMENTOS"),
-      read("TAXAS")
-    ]);
-
-    categories=deduplicateCategories(categoryRows);
-    categories.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||""),"pt-BR"));
-    accounts=accountRows.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||""),"pt-BR"));
-    cards=cardRows.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||""),"pt-BR"));
-    recurring=recurringRows;
-    goalsList=goalRows;
-    txs=txRows;
-    machineRates=rateRows.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||""),"pt-BR"));
-
-    categoriesCache=categories.slice();
-    accountsCache=accounts.slice();
-    cardsCache=cards.slice();
-
-    txs.sort((x,y)=>String(y.transaction_date||"").localeCompare(String(x.transaction_date||"")));
-    txs.forEach(t=>joinRelations("transactions",t));
-    recurring.forEach(r=>joinRelations("recurring",r));
-
-    // Guarda a última leitura válida para que um refresh não deixe a tela vazia
-    // se o Apps Script estiver temporariamente lento/offline.
+  const uid=user.uid;
+  const read=async(table)=>{
     try{
-      localStorage.setItem("reluz_data_cache",JSON.stringify({
-        uid,
-        at:Date.now(),
-        categories,accounts,cards,recurring,goalsList,txs,machineRates
-      }));
-    }catch(e){}
-
-    fill();
-    render();
-    window.__reluzLoaded=true;
-    window.__reluzDataError="";
-  }catch(error){
-    console.error("Erro ao carregar dados do Google Sheets:",error);
-    window.__reluzDataError=String(error?.message||error);
-
-    // Fallback: mantém a última leitura válida após atualizar a página.
-    try{
-      const cache=JSON.parse(localStorage.getItem("reluz_data_cache")||"null");
-      if(cache && String(cache.uid)===uid){
-        categories=cache.categories||[];
-        accounts=cache.accounts||[];
-        cards=cache.cards||[];
-        recurring=cache.recurring||[];
-        goalsList=cache.goalsList||[];
-        txs=cache.txs||[];
-        machineRates=cache.machineRates||[];
-        categoriesCache=categories.slice();
-        accountsCache=accounts.slice();
-        cardsCache=cards.slice();
-        txs.forEach(t=>joinRelations("transactions",t));
-        recurring.forEach(r=>joinRelations("recurring",r));
-        fill();
-        render();
-        msg("authMsg","Dados exibidos do último carregamento. Sincronização com o Google Sheets pendente.");
-        return;
-      }
-    }catch(e){}
-
-    fill();
-    render();
-    msg("authMsg","Não foi possível carregar os dados do Google Sheets. Tente atualizar novamente.");
-  }
+      const r=await sb.from(table).select("*").eq("user_id",uid);
+      if(r.error) throw r.error;
+      return Array.isArray(r.data)?r.data:[];
+    }catch(error){
+      console.error("Erro ao carregar "+table,error);
+      return [];
+    }
+  };
+  const [a,b,c,d,e,f,g]=await Promise.all([
+    read("categories"),read("accounts"),read("cards"),read("recurring"),
+    read("goals"),read("transactions"),read("machine_rates")
+  ]);
+  categories=await deduplicateCategories(a);
+  categories.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||""),"pt-BR"));
+  categoriesCache=categories.slice();
+  accounts=b.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||""),"pt-BR"));
+  accountsCache=accounts.slice();
+  cards=c.sort((x,y)=>String(x.name||"").localeCompare(String(y.name||""),"pt-BR"));
+  cardsCache=cards.slice();
+  recurring=d; goalsList=e; txs=f; machineRates=g;
+  txs.sort((x,y)=>String(y.transaction_date||"").localeCompare(String(x.transaction_date||"")));
+  txs.forEach(t=>joinRelations("transactions",t));
+  recurring.forEach(r=>joinRelations("recurring",r));
+  fill();
+  render();
 }
 function fill(){
   fillCategorySelects();
@@ -421,7 +351,7 @@ function updateMetalFields(){
   const isPedido=String(cat?.name||"").trim().toLowerCase()==="pedido";
   el.classList.toggle("hidden",!isPedido);
 }
-function fillCategorySelects(){const type=$("txType")?.value||"saida";const available=categories.filter(c=>c.type==="ambos"||c.type===type);$("txCat").innerHTML=available.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join("")||'<option value="">Cadastre uma categoria primeiro</option>';const recurringType=$("recType")?.value||"saida";const recurringCats=categories.filter(c=>c.type==="ambos"||c.type===recurringType);$("recCat").innerHTML=recurringCats.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join("")||'<option value="">Cadastre uma categoria primeiro</option>';updateMetalFields()}
+function fillCategorySelects(){const type=$("txType")?.value||"saida";const available=categories.map(normalizeCategory).filter(c=>c.type==="ambos"||c.type===type);$("txCat").innerHTML=available.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join("")||'<option value="">Cadastre uma categoria primeiro</option>';const recurringType=$("recType")?.value||"saida";const recurringCats=categories.filter(c=>c.type==="ambos"||c.type===recurringType);$("recCat").innerHTML=recurringCats.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join("")||'<option value="">Cadastre uma categoria primeiro</option>';updateMetalFields()}
 async function saveCategory(e){
   e.preventDefault();
   msg("catMsg","");
@@ -711,8 +641,15 @@ async function saveTxCore(e){
 
    activeSaveKey=null;
    msg("txMsg","Lançamento atualizado.");
+   const updated=Array.isArray(r.data)?r.data[0]:r.data;
+   if(updated?.id){
+     const idx=txs.findIndex(t=>String(t.id)===String(updated.id));
+     if(idx>=0) txs[idx]=updated; else txs.unshift(updated);
+     joinRelations("transactions",updated);
+   }
    clearTxForm();
-   await load();
+   fill();
+   render();
    return;
 }
  let rows=[];
