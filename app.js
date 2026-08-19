@@ -1,5 +1,5 @@
 // RELUZ FINANCEIRO — autenticação e banco 100% via Google Sheets + Apps Script.
-const API_URL = "https://script.google.com/macros/s/AKfycbyJedQAnH1rwI48I0SykPRtvGU3dZeARCKXcwtn8cPE9_HQT6cGvt295xj3OOMQU_lI/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbzE9bJFnzt1JCLOmKjn6m8SmbcknTEEwc2JgdzSyDpw6L9DPV-2Q2EoeUNKu82YXPfM/exec";
 let editingTxId = null;
 let machineRates = [];
 let activeSaveKey = null;
@@ -583,35 +583,48 @@ async function saveTxCore(e){
  const base={user_id:user.uid,type:$('txType').value,amount:total,original_amount:total,transaction_date:$('txDate').value,competence_date:$('txDate').value,paid_date:$('txPaidDate').value||null,category_id:$('txCat').value,subcategory:$('txSubcategory').value||null,account_id:$('txAccount').value||null,card_id:$('txCard').value||null,payment_method:method,status,name:$('txName').value.trim(),description:$('txDesc').value.trim()||null,notes:$('txNotes').value||null,dre_class:$('txDreClass')?.value||($('txType').value==='entrada'?'receita':'despesa_operacional'),attachment_url:attachmentUrl,recurrence:$('txRecurring').value,group_id:g,payment_parts:parts,payment_received_amount:target,payment_fee_total:parts.reduce((s,p)=>s+p.amount*(p.fee_percent||0)/100,0),metal_value:+($("txMetalValue")?.value||0)||0,initial_kg:+($("txInitialKg")?.value||0)||0,final_kg:+($("txFinalKg")?.value||0)||0,category_name:categoryName};
  if(editingTxId){
    const current=txs.find(t=>t.id===editingTxId)||{};
+   if(!current || !current.id) throw new Error("Lançamento não encontrado para edição.");
+
    const totalFee=parts.reduce((s,p)=>s+(Number(p.amount)||0)*(Number(p.fee_percent)||0)/100,0);
    const netTotal=Math.max(0,total-totalFee);
+   const editStatus=status || current.status || "pago";
+   const editReceived=
+     editStatus==="pendente" ? 0 :
+     editStatus==="parcial" ? Math.min(total,Math.max(0,target)) :
+     total;
+
    const editRecord={
      ...base,
-     id:editingTxId,
      amount:netTotal,
      original_amount:total,
      payment_fee_total:totalFee,
-     payment_received_amount:status==='pendente'?0:(status==='parcial'?target:total),
-     remaining_amount:status==='pendente'?total:Math.max(0,total-(status==='parcial'?target:total)),
+     payment_received_amount:editReceived,
+     remaining_amount:Math.max(0,total-editReceived),
+     status:editReceived>=total-0.01?"pago":(editReceived>0?"parcial":"pendente"),
      fee_percent:parts.length===1?Number(parts[0].fee_percent||0):0,
      edited_at:new Date().toISOString(),
      installment_number:current.installment_number||1,
      installment_total:current.installment_total||1
    };
-   const r=await api("save_transaction",{
-     user_id:user.uid,
-     dedupe_key:crypto.randomUUID(),
+
+   // Edição usa o endpoint genérico de UPDATE já existente no Apps Script.
+   // Não passa pelo fluxo de criação nem por dedupe_key.
+   const r=await api("update",{
+     sheet:"LANCAMENTOS",
+     id:editingTxId,
      record:editRecord
    });
-   if(r?.duplicate && r.id!==editingTxId){
-     throw new Error("Não foi possível identificar o lançamento que está sendo editado.");
+
+   if(!r || !r.success){
+     throw new Error(r?.error || "O Apps Script não confirmou a atualização.");
    }
-   msg("txMsg","Lançamento atualizado.");
+
    activeSaveKey=null;
+   msg("txMsg","Lançamento atualizado.");
    clearTxForm();
    await load();
    return;
- }
+}
  let rows=[];
  for(const part of parts.length?parts:[{method,amount:target,card_id:$('txCard').value||null,rate_id:null,installments:1,fee_percent:0}]){
    const inst=Math.max(1,part.installments||1);
