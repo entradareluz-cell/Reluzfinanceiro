@@ -607,6 +607,15 @@ async function saveTxCore(e){
      installment_total:current.installment_total||1
    };
 
+   // `base` contains payment_parts for the form, but a normal edit must
+   // not enter the payment-children replacement path. Only send payment_parts
+   // when the user is explicitly editing a multiple-payment transaction.
+   if(method==="multiple"){
+     editRecord.payment_parts=parts;
+   }else{
+     delete editRecord.payment_parts;
+   }
+
    // Edição usa o endpoint genérico de UPDATE já existente no Apps Script.
    // Não passa pelo fluxo de criação nem por dedupe_key.
    const r=await api("update",{
@@ -617,6 +626,9 @@ async function saveTxCore(e){
 
    if(!r || !r.success){
      throw new Error(r?.error || "O Apps Script não confirmou a atualização.");
+   }
+   if(!r.data){
+     throw new Error("O Apps Script respondeu sem confirmar o lançamento atualizado.");
    }
 
    activeSaveKey=null;
