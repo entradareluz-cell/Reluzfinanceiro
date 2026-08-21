@@ -144,32 +144,96 @@ header{height:72px!important;padding:0 26px!important;position:sticky;top:0;z-in
 @media(max-width:600px){.edit-tx-modal{padding:0}.edit-tx-dialog{width:100vw;height:100vh;max-height:100vh;border-radius:0!important}.edit-tx-header{padding:17px}.edit-tx-header h2{font-size:18px!important}#editTxHost{max-height:calc(100vh - 78px);padding:15px}.edit-tx-dialog #txForm>label,.edit-tx-dialog #txForm>label.wide{grid-column:span 12}.edit-tx-dialog .part-main-grid,.edit-tx-dialog .part-detail{grid-template-columns:1fr}.edit-tx-dialog .payment-breakdown{padding:11px!important}}
 
 
+
 /* ===== MOTION PRINCIPLES — Reluz Financeiro ===== */
 :root{
-  --motion-fast:180ms;
-  --motion-ui:220ms;
-  --motion-panel:260ms;
+  --motion-fast:160ms;
+  --motion-ui:200ms;
+  --motion-panel:280ms;
   --motion-ease:cubic-bezier(.22,1,.36,1);
   --motion-exit:cubic-bezier(.4,0,1,1);
+  --motion-shadow:0 12px 30px rgba(25,57,96,.10);
 }
-html{scroll-behavior:smooth}
-button,a,.card,.insight,.dash-kpi,.search-item,.rate-row,.payment-part,.page > h2,
-input,select,textarea{transition:transform var(--motion-fast) var(--motion-ease),opacity var(--motion-fast) var(--motion-ease),box-shadow var(--motion-ui) var(--motion-ease),border-color var(--motion-ui) var(--motion-ease),background-color var(--motion-ui) var(--motion-ease)}
+
+/* Não animar cada input/card indiscriminadamente: isso deixa o produto lento.
+   As transições ficam apenas nos elementos que realmente comunicam estado. */
+button,a,.card,.insight,.dash-kpi,.search-item,.rate-row,.payment-part{transition:transform var(--motion-fast) var(--motion-ease),opacity var(--motion-fast) var(--motion-ease),box-shadow var(--motion-ui) var(--motion-ease),border-color var(--motion-ui) var(--motion-ease),background-color var(--motion-ui) var(--motion-ease)}
+input,select,textarea{transition:border-color var(--motion-fast) var(--motion-ease),box-shadow var(--motion-fast) var(--motion-ease),background-color var(--motion-fast) var(--motion-ease)}
+
 button:not(:disabled):active{transform:scale(.985)}
 button.motion-press{animation:motion-press 180ms var(--motion-ease) both}
-.motion-target:hover{transform:translateY(-1px)}
-.page.motion-enter{animation:page-enter var(--motion-panel) var(--motion-ease) both}
-.skeleton-stack{display:grid;gap:9px;padding:12px 0}.skeleton-line{display:block;width:72%;height:10px;border-radius:999px;background:linear-gradient(90deg,#edf2f7 0%,#f8fafc 45%,#edf2f7 100%);background-size:220% 100%;animation:skeleton-shimmer 1.15s linear infinite}.skeleton-line.wide{width:92%}.skeleton-line.short{width:44%}.skeleton-row td{padding:13px 10px!important}.skeleton-row .skeleton-line{width:100%;max-width:340px}
+
+.card:hover,.insight:hover,.dash-kpi:hover{transform:translateY(-2px);box-shadow:var(--motion-shadow)}
+.dashboard-hero:hover{transform:none}
+.page.motion-enter{animation:page-enter var(--motion-panel) var(--motion-ease) both;view-transition-name:page}
+
+/* Entrada sequencial apenas nas áreas principais do dashboard. */
+.motion-ready .dashboard-page .dashboard-hero{animation:surface-enter 320ms var(--motion-ease) both}
+.motion-ready .dashboard-page .dash-kpi:nth-child(1){animation:surface-enter 300ms 35ms var(--motion-ease) both}
+.motion-ready .dashboard-page .dash-kpi:nth-child(2){animation:surface-enter 300ms 70ms var(--motion-ease) both}
+.motion-ready .dashboard-page .dash-kpi:nth-child(3){animation:surface-enter 300ms 105ms var(--motion-ease) both}
+.motion-ready .dashboard-page .dash-kpi:nth-child(4){animation:surface-enter 300ms 140ms var(--motion-ease) both}
+.motion-ready .dashboard-page .dashboard-insights .insight:nth-child(1){animation:surface-enter 260ms 120ms var(--motion-ease) both}
+.motion-ready .dashboard-page .dashboard-insights .insight:nth-child(2){animation:surface-enter 260ms 150ms var(--motion-ease) both}
+.motion-ready .dashboard-page .dashboard-insights .insight:nth-child(3){animation:surface-enter 260ms 180ms var(--motion-ease) both}
+.motion-ready .dashboard-page .dashboard-insights .insight:nth-child(4){animation:surface-enter 260ms 210ms var(--motion-ease) both}
+.motion-ready .dashboard-page .dashboard-chart-card{animation:surface-enter 300ms 180ms var(--motion-ease) both}
+.motion-ready .dashboard-page .dashboard-analysis-card{animation:surface-enter 300ms 220ms var(--motion-ease) both}
+.motion-ready .dashboard-page .dashboard-bottom .card{animation:surface-enter 300ms 250ms var(--motion-ease) both}
+
+/* Skeleton: evita o salto vazio -> conteúdo e não bloqueia a interface. */
+.skeleton-stack{display:grid;gap:9px;padding:12px 0}
+.skeleton-line{display:block;width:72%;height:10px;border-radius:999px;background:linear-gradient(90deg,#e8eef5 0%,#f8fafc 45%,#e8eef5 100%);background-size:220% 100%;animation:skeleton-shimmer 1.15s linear infinite}
+.skeleton-line.wide{width:92%}.skeleton-line.short{width:44%}
+.skeleton-row td{padding:13px 10px!important}.skeleton-row .skeleton-line{width:100%;max-width:340px}
+
 .btn-spinner{width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;display:inline-block;vertical-align:-2px;animation:spin .65s linear infinite}.btn-spinner.hidden{display:none}
 .auth-loading-progress span{transition:width 320ms var(--motion-ease)}
 [aria-busy="true"]{cursor:progress}
+
+/* View Transitions API: suave quando suportado, fallback para page-enter. */
+::view-transition-old(page){animation:page-out 140ms var(--motion-exit) both}
+::view-transition-new(page){animation:page-in 220ms var(--motion-ease) both}
+
 @keyframes motion-press{0%{transform:scale(.985)}100%{transform:scale(1)}}
-@keyframes page-enter{from{opacity:.01;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+@keyframes page-enter{from{opacity:.01;transform:translateY(7px)}to{opacity:1;transform:translateY(0)}}
+@keyframes surface-enter{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes page-in{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+@keyframes page-out{from{opacity:1}to{opacity:0}}
 @keyframes skeleton-shimmer{from{background-position:100% 0}to{background-position:-100% 0}}
 @keyframes spin{to{transform:rotate(360deg)}}
+
 @media (prefers-reduced-motion:reduce){
   html{scroll-behavior:auto!important}
   *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important;transition-duration:.001ms!important}
-  button:not(:disabled):active,.motion-target:hover{transform:none!important}
+  button:not(:disabled):active,.card:hover,.insight:hover,.dash-kpi:hover{transform:none!important;box-shadow:inherit!important}
 }
-@media (hover:none){.motion-target:hover{transform:none}.card:hover{box-shadow:none}}
+@media (hover:none){.card:hover,.insight:hover,.dash-kpi:hover{transform:none;box-shadow:inherit}}
+
+
+/* ===== REFINO VISUAL V2 — hierarquia e densidade do dashboard ===== */
+main{padding:26px clamp(18px,2.8vw,36px) 42px}
+nav{width:236px;padding:16px 12px}
+nav button{border:1px solid transparent;border-radius:12px;padding:11px 13px;margin-bottom:7px;font-weight:700}
+nav button.active{border-color:#d8e7ff}
+.dashboard-page{max-width:1480px;margin:0 auto}
+.dashboard-hero{min-height:142px;padding:30px 32px}
+.dashboard-kpis{grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+.dashboard-kpis .dash-kpi{min-width:0}
+.dashboard-insights{gap:14px}
+.dashboard-chart-grid,.dashboard-analysis-grid{gap:20px}
+.dashboard-chart-card,.dashboard-analysis-card,.dashboard-bottom .card{border-radius:18px}
+.card{border-radius:16px}
+
+@media(max-width:1050px){
+  main{padding:22px 20px 34px}
+  nav{width:220px}
+  .dashboard-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:720px){
+  main{padding:16px 14px 28px}
+  nav{width:100%;padding:10px;gap:6px}
+  nav button{margin:0;min-height:42px}
+  .dashboard-hero{min-height:auto;padding:24px 22px}
+  .dashboard-kpis{grid-template-columns:1fr}
+}

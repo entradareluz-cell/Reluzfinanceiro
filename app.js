@@ -183,10 +183,10 @@ function friendlyError(err){
  return m;
 }
 
-/* ===== MOTION SYSTEM — Design Motion Principles =====
-   Productivity dashboard: restrained, fast, purposeful motion.
-   High-frequency interactions avoid decorative animation; transitions stay
-   short and interruptible. All motion respects prefers-reduced-motion.
+/* ===== MOTION SYSTEM — Reluz Financeiro =====
+   Movimento de produto: rápido, discreto e com função clara.
+   A lógica financeira não é alterada aqui; este bloco cuida apenas de
+   carregamento, feedback e transições da interface.
 */
 const motionState={loaded:false,activePage:null};
 function showSkeletons(){
@@ -205,16 +205,25 @@ function markMotionReady(){
   clearSkeletons();
 }
 function lazyObserve(selector,callback){
-  const el=document.querySelector(selector); if(!el || !('IntersectionObserver' in window)){callback();return;}
-  const io=new IntersectionObserver(entries=>{if(entries.some(e=>e.isIntersecting)){io.disconnect();callback();}},{rootMargin:'120px'});
+  const el=document.querySelector(selector);
+  if(!el || !('IntersectionObserver' in window)){callback();return;}
+  const io=new IntersectionObserver(entries=>{
+    if(entries.some(e=>e.isIntersecting)){io.disconnect();callback();}
+  },{rootMargin:'160px'});
   io.observe(el);
 }
 function initMotion(){
-  document.querySelectorAll('button,a,.card,.insight,.dash-kpi,.page > h2').forEach(el=>el.classList.add('motion-target'));
-  document.querySelectorAll('img').forEach(img=>{if(!img.hasAttribute('loading'))img.loading='lazy';if(!img.hasAttribute('decoding'))img.decoding='async';});
+  document.querySelectorAll('.dashboard-hero,.dash-kpi,.dashboard-insights .insight,.dashboard-chart-card,.dashboard-analysis-card,.dashboard-bottom .card').forEach(el=>el.classList.add('motion-surface'));
+  document.querySelectorAll('img').forEach(img=>{
+    if(!img.hasAttribute('loading'))img.loading='lazy';
+    if(!img.hasAttribute('decoding'))img.decoding='async';
+  });
   document.addEventListener('click',e=>{
-    const b=e.target.closest('button'); if(!b || b.disabled) return;
-    b.classList.remove('motion-press'); void b.offsetWidth; b.classList.add('motion-press');
+    const b=e.target.closest('button');
+    if(!b || b.disabled)return;
+    b.classList.remove('motion-press');
+    void b.offsetWidth;
+    b.classList.add('motion-press');
   },{passive:true});
 }
 
@@ -883,17 +892,29 @@ function page(p,opts={}){
   const current=document.querySelector('.page:not(.hidden)');
   const target=$(p); if(!target)return;
   if(current===target){if(p==="dashboard")dashboard();return;}
-  document.querySelectorAll(".page").forEach(x=>x.classList.add("hidden"));
-  target.classList.remove("hidden");
-  target.classList.remove("motion-enter"); void target.offsetWidth; target.classList.add("motion-enter");
-  document.querySelectorAll("nav button").forEach(b=>b.classList.toggle("active",b.dataset.page===p));
-  motionState.activePage=p;
-  if(p==="calendario")advCalendar();
-  if(p==="dashboard"){
-    // Charts are intentionally deferred until the page is visible/idle.
-    lazyObserve('#flow',()=>{if(document.visibilityState==='hidden')return; const run=()=>dashboard(); if('requestIdleCallback' in window) window.requestIdleCallback(run,{timeout:250}); else setTimeout(run,0);});
+  const activate=()=>{
+    document.querySelectorAll(".page").forEach(x=>x.classList.add("hidden"));
+    target.classList.remove("hidden");
+    target.classList.remove("motion-enter");
+    void target.offsetWidth;
+    target.classList.add("motion-enter");
+    document.querySelectorAll("nav button").forEach(b=>b.classList.toggle("active",b.dataset.page===p));
+    motionState.activePage=p;
+    if(p==="calendario")advCalendar();
+    if(p==="dashboard"){
+      lazyObserve('#flow',()=>{
+        if(document.visibilityState==='hidden')return;
+        const run=()=>dashboard();
+        if('requestIdleCallback' in window) window.requestIdleCallback(run,{timeout:250}); else setTimeout(run,0);
+      });
+    }
+    if(!opts.instant) window.scrollTo({top:0,behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});
+  };
+  if(!opts.instant && document.startViewTransition && !window.matchMedia('(prefers-reduced-motion: reduce)').matches){
+    document.startViewTransition(activate);
+  }else{
+    activate();
   }
-  if(!opts.instant) window.scrollTo({top:0,behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});
 }
 
 /* Dashboard financeiro premium */
