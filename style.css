@@ -142,3 +142,34 @@ header{height:72px!important;padding:0 26px!important;position:sticky;top:0;z-in
 .edit-tx-dialog #txMsg{grid-column:span 12;margin:0;padding:10px 12px;border-radius:10px;font-size:11px}
 @media(max-width:900px){.edit-tx-dialog #txForm>label,.edit-tx-dialog #txForm>label.wide{grid-column:span 6}.edit-tx-dialog .part-main-grid{grid-template-columns:1fr 1fr}.edit-tx-dialog .part-detail{grid-template-columns:1fr 1fr}}
 @media(max-width:600px){.edit-tx-modal{padding:0}.edit-tx-dialog{width:100vw;height:100vh;max-height:100vh;border-radius:0!important}.edit-tx-header{padding:17px}.edit-tx-header h2{font-size:18px!important}#editTxHost{max-height:calc(100vh - 78px);padding:15px}.edit-tx-dialog #txForm>label,.edit-tx-dialog #txForm>label.wide{grid-column:span 12}.edit-tx-dialog .part-main-grid,.edit-tx-dialog .part-detail{grid-template-columns:1fr}.edit-tx-dialog .payment-breakdown{padding:11px!important}}
+
+
+/* ===== MOTION PRINCIPLES — Reluz Financeiro ===== */
+:root{
+  --motion-fast:180ms;
+  --motion-ui:220ms;
+  --motion-panel:260ms;
+  --motion-ease:cubic-bezier(.22,1,.36,1);
+  --motion-exit:cubic-bezier(.4,0,1,1);
+}
+html{scroll-behavior:smooth}
+button,a,.card,.insight,.dash-kpi,.search-item,.rate-row,.payment-part,.page > h2,
+input,select,textarea{transition:transform var(--motion-fast) var(--motion-ease),opacity var(--motion-fast) var(--motion-ease),box-shadow var(--motion-ui) var(--motion-ease),border-color var(--motion-ui) var(--motion-ease),background-color var(--motion-ui) var(--motion-ease)}
+button:not(:disabled):active{transform:scale(.985)}
+button.motion-press{animation:motion-press 180ms var(--motion-ease) both}
+.motion-target:hover{transform:translateY(-1px)}
+.page.motion-enter{animation:page-enter var(--motion-panel) var(--motion-ease) both}
+.skeleton-stack{display:grid;gap:9px;padding:12px 0}.skeleton-line{display:block;width:72%;height:10px;border-radius:999px;background:linear-gradient(90deg,#edf2f7 0%,#f8fafc 45%,#edf2f7 100%);background-size:220% 100%;animation:skeleton-shimmer 1.15s linear infinite}.skeleton-line.wide{width:92%}.skeleton-line.short{width:44%}.skeleton-row td{padding:13px 10px!important}.skeleton-row .skeleton-line{width:100%;max-width:340px}
+.btn-spinner{width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;display:inline-block;vertical-align:-2px;animation:spin .65s linear infinite}.btn-spinner.hidden{display:none}
+.auth-loading-progress span{transition:width 320ms var(--motion-ease)}
+[aria-busy="true"]{cursor:progress}
+@keyframes motion-press{0%{transform:scale(.985)}100%{transform:scale(1)}}
+@keyframes page-enter{from{opacity:.01;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+@keyframes skeleton-shimmer{from{background-position:100% 0}to{background-position:-100% 0}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto!important}
+  *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important;transition-duration:.001ms!important}
+  button:not(:disabled):active,.motion-target:hover{transform:none!important}
+}
+@media (hover:none){.motion-target:hover{transform:none}.card:hover{box-shadow:none}}
