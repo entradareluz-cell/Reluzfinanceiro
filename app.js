@@ -1,5 +1,5 @@
 // RELUZ FINANCEIRO — autenticação e banco 100% via Google Sheets + Apps Script.
-const API_URL = "https://script.google.com/macros/s/AKfycbyZz4s2lSh-79qemUb8029_qVEc5EcAW0bL5UkWGgrKzH_YQeHfR--V6q_nhfaOwcb4/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbzmLkjT5WjqRbaq6oei0JoDIJn-_VeAaLEPERlAYt4g7zNpDHevtTCR86EterN-LhRW/exec";
 let editingTxId = null;
 let machineRates = [];
 let activeSaveKey = null;
@@ -182,7 +182,44 @@ function friendlyError(err){
  if(m.includes("Failed to fetch")||m.includes("NetworkError")) return "Não foi possível conectar ao Google Sheets.";
  return m;
 }
+
+/* ===== MOTION SYSTEM — Design Motion Principles =====
+   Productivity dashboard: restrained, fast, purposeful motion.
+   High-frequency interactions avoid decorative animation; transitions stay
+   short and interruptible. All motion respects prefers-reduced-motion.
+*/
+const motionState={loaded:false,activePage:null};
+function showSkeletons(){
+  const targets=["txBody","catBody","accountBody","cardBody","rateBody","recBody","goals","due","cardDash","goalDash","payableList","receivableList","summary","reportBody","dashCategoryList"];
+  targets.forEach(id=>{
+    const el=$(id); if(!el || el.dataset.skeletonActive==='1') return;
+    el.dataset.skeletonActive='1';
+    if(el.tagName==='TBODY') el.innerHTML=Array.from({length:4},()=>'<tr class="skeleton-row"><td colspan="12"><span class="skeleton-line"></span></td></tr>').join('');
+    else el.innerHTML='<div class="skeleton-stack"><span class="skeleton-line wide"></span><span class="skeleton-line"></span><span class="skeleton-line short"></span></div>';
+  });
+}
+function clearSkeletons(){document.querySelectorAll('[data-skeleton-active="1"]').forEach(el=>{el.dataset.skeletonActive='0';});}
+function markMotionReady(){
+  motionState.loaded=true;
+  document.documentElement.classList.add('motion-ready');
+  clearSkeletons();
+}
+function lazyObserve(selector,callback){
+  const el=document.querySelector(selector); if(!el || !('IntersectionObserver' in window)){callback();return;}
+  const io=new IntersectionObserver(entries=>{if(entries.some(e=>e.isIntersecting)){io.disconnect();callback();}},{rootMargin:'120px'});
+  io.observe(el);
+}
+function initMotion(){
+  document.querySelectorAll('button,a,.card,.insight,.dash-kpi,.page > h2').forEach(el=>el.classList.add('motion-target'));
+  document.querySelectorAll('img').forEach(img=>{if(!img.hasAttribute('loading'))img.loading='lazy';if(!img.hasAttribute('decoding'))img.decoding='async';});
+  document.addEventListener('click',e=>{
+    const b=e.target.closest('button'); if(!b || b.disabled) return;
+    b.classList.remove('motion-press'); void b.offsetWidth; b.classList.add('motion-press');
+  },{passive:true});
+}
+
 document.addEventListener("DOMContentLoaded",async()=>{
+  initMotion();
   $("dashMonth").value=thisMonth;$("reportMonth").value=thisMonth;$("txDate").value=today;
   $("loginForm").onsubmit=login;$("signupForm").onsubmit=signup;$("logout").onclick=()=>sb.auth.signOut();
   $("txForm").onsubmit=saveTx;$("catForm").onsubmit=saveCategory;$("cardForm").onsubmit=saveCard;$("rateForm").onsubmit=saveMachineRate;$("recForm").onsubmit=saveRec;$("goalForm").onsubmit=saveGoal;$("accountForm").onsubmit=saveAccount;$("txType").onchange=fillCategorySelects;$("txCat").addEventListener("change",updateMetalFields);$("recType")?.addEventListener("change",fillCategorySelects);
@@ -208,10 +245,13 @@ async function start(u){
   }
   $("loginView").classList.add("hidden");
   $("app").classList.remove("hidden");
-  setAuthLoading(false);
-  page("dashboard");
+  setAuthLoading(true,"Carregando seu financeiro...","Login confirmado. Preparando seus dados.");
+  page("dashboard",{instant:true});
+  showSkeletons();
   try{
     await load();
+    markMotionReady();
+    setAuthLoading(false);
   }catch(err){
     console.error("Erro ao carregar dados após login:",err);
     msg("authMsg",friendlyError(err));
@@ -303,6 +343,7 @@ async function deduplicateCategories(rows){
 }
 async function load(){
   if(!user?.uid) return;
+  showSkeletons();
   const uid=user.uid;
   const read=async(table)=>{
     try{
@@ -838,7 +879,22 @@ function pdf(){
  d.text("DRE",14,46);d.text(`Receita bruta: ${money(i)}`,14,54);d.text(`(-) Deduções: ${money(ded)}`,14,61);d.text(`Receita líquida: ${money(i-ded)}`,14,68);d.text(`(-) Custos: ${money(custos)}`,14,75);d.text(`(-) Despesas operacionais: ${money(op)}`,14,82);d.text(`Resultado operacional: ${money(i-ded-custos-op)}`,14,89);d.text(`(-) Despesas financeiras: ${money(fin)}`,14,96);d.text(`Resultado líquido: ${money(i-ded-custos-op-fin)}`,14,103);
  let y=114;d.setFontSize(8);r.forEach(t=>{if(y>285){d.addPage();y=15}const metal=t.metal_value?` | Metal ${money(t.metal_value)} | KG ${Number(t.initial_kg||0).toFixed(3)}→${Number(t.final_kg||0).toFixed(3)}`:"";d.text(`${t.transaction_date} | ${t.type} | ${String(t.name||t.description||"Sem nome").slice(0,28)} | ${money(t.amount)}${metal}`,14,y);y+=6});d.save(`financeiro-${m}.pdf`)
 }
-function page(p){document.querySelectorAll(".page").forEach(x=>x.classList.add("hidden"));const target=$(p);if(!target)return;target.classList.remove("hidden");document.querySelectorAll("nav button").forEach(b=>b.classList.toggle("active",b.dataset.page===p));if(p==="calendario")advCalendar();if(p==="dashboard")dashboard();window.scrollTo({top:0,behavior:"smooth"})}
+function page(p,opts={}){
+  const current=document.querySelector('.page:not(.hidden)');
+  const target=$(p); if(!target)return;
+  if(current===target){if(p==="dashboard")dashboard();return;}
+  document.querySelectorAll(".page").forEach(x=>x.classList.add("hidden"));
+  target.classList.remove("hidden");
+  target.classList.remove("motion-enter"); void target.offsetWidth; target.classList.add("motion-enter");
+  document.querySelectorAll("nav button").forEach(b=>b.classList.toggle("active",b.dataset.page===p));
+  motionState.activePage=p;
+  if(p==="calendario")advCalendar();
+  if(p==="dashboard"){
+    // Charts are intentionally deferred until the page is visible/idle.
+    lazyObserve('#flow',()=>{if(document.visibilityState==='hidden')return; const run=()=>dashboard(); if('requestIdleCallback' in window) window.requestIdleCallback(run,{timeout:250}); else setTimeout(run,0);});
+  }
+  if(!opts.instant) window.scrollTo({top:0,behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});
+}
 
 /* Dashboard financeiro premium */
 function moneyBR(v){return new Intl.NumberFormat("pt-BR",{style:"currency",currency:"BRL"}).format(Number(v)||0);}

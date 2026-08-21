@@ -18,3 +18,17 @@ Validação:
 - `app.js`: sintaxe validada com Node.js.
 - `Code.gs`: arquivo preservado da base funcional; validação por `node --check`
   não é aplicável diretamente à extensão `.gs` neste ambiente.
+
+## Padrão de Motion e Interação — 2026-08
+
+A interface segue o skill **Design Motion Principles** de kylezantos: movimento deve ser proposital, rápido e discreto para um dashboard financeiro de uso frequente. A referência recomenda decidir primeiro se uma interação precisa de animação, manter interações frequentes praticamente instantâneas e tratar `prefers-reduced-motion` como requisito. citeturn0search0turn0search3
+
+Implementado nesta versão:
+- skeleton screens para áreas de dados durante carregamento;
+- lazy loading para imagens e observação de visibilidade quando aplicável;
+- entrada suave de páginas;
+- feedback tátil curto em botões;
+- estados de progresso já existentes no login e reforçados para ações de formulário;
+- transições consistentes para cards, controles e listas;
+- `prefers-reduced-motion` desativa movimento não essencial;
+- animações mantidas curtas e interruptíveis, evitando stagger/pulse decorativos.
